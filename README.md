@@ -1,7 +1,4 @@
-Copy everything inside the box below — the outer fence uses four backticks so the inner ones won't break when you paste:
-
-````markdown
-<div align="center">
+&lt;div align="center"&gt;
 
 # 🔐 AWS IoT Secure Edge Fleet
 
@@ -12,7 +9,7 @@ Copy everything inside the box below — the outer fence uses four backticks so 
 [![AWS IoT](https://img.shields.io/badge/AWS-IoT-FF9900?logo=amazon-aws&logoColor=white)](https://aws.amazon.com/iot/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-</div>
+&lt;/div&gt;
 
 ---
 
@@ -46,9 +43,9 @@ Copy everything inside the box below — the outer fence uses four backticks so 
 
 ### 🔑 Provisioning flow (first boot)
 
-1. Generates a serial number and connects as `claim-<serial>` with the fleet claim certificate
+1. Generates a serial number and connects as `claim-&lt;serial&gt;` with the fleet claim certificate
 2. Publishes to `$aws/certificates/create/json` to generate a key pair + certificate
-3. Publishes to `$aws/provisioning-templates/<template>/provision/json` — the template registers the Thing, activates the cert, attaches the policy, and adds it to the Thing Group
+3. Publishes to `$aws/provisioning-templates/&lt;template&gt;/provision/json` — the template registers the Thing, activates the cert, attaches the policy, and adds it to the Thing Group
 4. Reconnects with the **permanent device certificate** (the claim cert can never operate the device)
 5. Credentials persist in `certs/` across reboots — no re-provisioning, ever
 
@@ -59,8 +56,8 @@ Create an IoT Job with a document like:
 ```json
 {
   "version": "1.2.0",
-  "packageUrl": "https://<ota-bucket>.s3.amazonaws.com/releases/app-1.2.0.tar.gz",
-  "checksum": "<sha256-hex>",
+  "packageUrl": "https://&lt;ota-bucket&gt;.s3.amazonaws.com/releases/app-1.2.0.tar.gz",
+  "checksum": "&lt;sha256-hex&gt;",
   "rollbackVersion": "1.1.0"
 }
 ```
@@ -105,8 +102,8 @@ aws iot create-keys-and-certificate \
   --private-key-outfile claim-private.key
 
 aws iot attach-policy \
-  --policy-name <claim_policy_name> \
-  --target <claimCertificateArn>
+  --policy-name &lt;claim_policy_name&gt; \
+  --target &lt;claimCertificateArn&gt;
 ```
 
 Place `claim-certificate.pem`, `claim-private.key`, and `AmazonRootCA1.pem` in `device-agent/certs/`.
@@ -123,7 +120,7 @@ First boot provisions the device — every boot after that reconnects instantly 
 
 ## 📡 Telemetry
 
-Publishes a heartbeat every 30s to `secure-edge-fleet/telemetry/<thingName>`:
+Publishes a heartbeat every 30s to `secure-edge-fleet/telemetry/&lt;thingName&gt;`:
 
 ```json
 { "thingName": "secure-edge-fleet-a1b2c3d4", "status": "online", "timestamp": 1727430000 }
@@ -157,6 +154,3 @@ Publishes a heartbeat every 30s to `secure-edge-fleet/telemetry/<thingName>`:
 ## 📄 License
 
 MIT — see [LICENSE](LICENSE)
-````
-
-Everything is in **one fenced block** so a single copy grabs the whole file. It'll render on GitHub with badges, a centered header, tables, emojis, and ASCII architecture diagram. Paste it into your README.md, commit, and you're done.
