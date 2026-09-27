@@ -1,4 +1,3 @@
-&lt;div align="center"&gt;
 
 # 🔐 AWS IoT Secure Edge Fleet
 
@@ -9,7 +8,6 @@
 [![AWS IoT](https://img.shields.io/badge/AWS-IoT-FF9900?logo=amazon-aws&logoColor=white)](https://aws.amazon.com/iot/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-&lt;/div&gt;
 
 ---
 
