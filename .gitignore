@@ -26,4 +26,5 @@ venv/
 *.key
 *.crt
 packages/*.tar.gz
-packages/*.zip
+packages/*.zipdevice-agent/certs/
+device-agent/packages/
