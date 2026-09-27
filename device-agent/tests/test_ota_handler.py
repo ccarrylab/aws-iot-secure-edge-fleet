@@ -147,17 +147,6 @@ class TestExtract:
 
         assert not (PACKAGES_DIR.parent.parent / "outside.txt").exists()
 
-    @pytest.mark.xfail(
-        reason=(
-            "_extract only validates member.name against install_dir, not the "
-            "*target* of symlink members. A symlink whose own name is safe "
-            "(e.g. 'escape') but whose linkname points outside install_dir "
-            "(e.g. '/etc') is currently extracted without error. Fix _extract "
-            "to also validate SYMTYPE/LNKTYPE member.linkname, then remove "
-            "this xfail."
-        ),
-        strict=True,
-    )
     def test_rejects_symlink_member_escaping_install_dir(self, isolated_cwd, tmp_path):
         handler = OTAHandler()
         archive = tmp_path / "evil_symlink.tar.gz"
@@ -351,28 +340,6 @@ class TestHandleJob:
 
         assert not (PACKAGES_DIR / "1.2.0.tar.gz").exists()
 
-    def test_missing_checksum_skips_verification_entirely(
-        self, isolated_cwd, tmp_path, fake_download, status_log
-    ):
-        """
-        Documents current behavior: handle_job only verifies the checksum
-        `if checksum and not self._verify_checksum(...)`. A job document
-        with no checksum field skips verification and still succeeds.
-        Consider making the checksum field required — a job with a missing
-        or empty checksum should probably fail closed, not open.
-        """
-        archive = make_tarball(tmp_path, {"app.py": "print('unverified')"})
-        fake_download.set_source(archive)
-        handler = OTAHandler(on_status=status_log)
-
-        job = {
-            "version": "1.2.0",
-            "packageUrl": "https://example.com/pkg.tar.gz",
-            # no "checksum" key at all
-        }
-
-        assert handler.handle_job(job) is True
-
     def test_checksum_mismatch_fails_and_reports_no_rollback_available(
         self, isolated_cwd, tmp_path, fake_download, status_log
     ):
@@ -428,7 +395,9 @@ class TestHandleJob:
         # "Current" is 1.1.0, but the job explicitly names 1.0.0 as the
         # rollback target — that should win over the previously-running version.
         (PACKAGES_DIR / "1.1.0").mkdir(parents=True)
+        (PACKAGES_DIR / "1.1.0" / "app.py").write_text("print(1)")
         (PACKAGES_DIR / "1.0.0").mkdir(parents=True)
+        (PACKAGES_DIR / "1.0.0" / "app.py").write_text("print(0)")
         setup_handler = OTAHandler()
         setup_handler._activate("1.1.0")
         setup_handler._save_state("1.1.0")

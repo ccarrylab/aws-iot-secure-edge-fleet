@@ -1,3 +1,4 @@
+import io
 import shutil
 import sys
 from pathlib import Path
@@ -24,21 +25,52 @@ def isolated_cwd(tmp_path, monkeypatch):
     return tmp_path
 
 
+class _FakeResponse:
+    """Stands in for the object returned by urllib.request.urlopen, which is
+    what ota_handler._download() streams from."""
+
+    def __init__(self, data: bytes):
+        self._buf = io.BytesIO(data)
+        self.headers = {"Content-Length": str(len(data))}
+
+    def read(self, n: int = -1) -> bytes:
+        return self._buf.read(n)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
 @pytest.fixture
 def fake_download(monkeypatch):
     """
-    Replaces urllib.request.urlretrieve so tests never touch the network.
+    Replaces the network entry points so tests never touch the network.
     Call fake_download.set_source(path) before triggering a download to
     control what bytes get "downloaded".
+
+    Both urlopen (used by the hardened _download, which streams so it can
+    enforce a size cap and write via a .part file) and urlretrieve (the
+    original call) are patched, so tests written against either shape work.
     """
     state = {"source": None}
 
-    def _urlretrieve(url, dest):
+    def _payload() -> bytes:
         if state["source"] is None:
             raise RuntimeError("fake_download: no source configured for this test")
-        shutil.copyfile(state["source"], dest)
+        return Path(state["source"]).read_bytes()
+
+    def _urlopen(url, timeout=None, **kwargs):
+        return _FakeResponse(_payload())
+
+    def _urlretrieve(url, dest, *args, **kwargs):
+        Path(dest).write_bytes(_payload())
         return str(dest), None
 
+    monkeypatch.setattr(
+        ota_handler_module.urllib.request, "urlopen", _urlopen
+    )
     monkeypatch.setattr(
         ota_handler_module.urllib.request, "urlretrieve", _urlretrieve
     )

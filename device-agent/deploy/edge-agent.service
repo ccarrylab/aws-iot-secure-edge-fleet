@@ -1,0 +1,71 @@
+# ---------------------------------------------------------------------------
+# /etc/systemd/system/edge-agent.service
+#
+# The repo ships no unit, so in practice the agent runs as whoever invoked it —
+# in the README's quickstart that is a developer, and often root. This unit
+# runs it as an unprivileged user, restarts on failure, and runs the rollback
+# guard before every start.
+#
+# Create the service user first:
+#   useradd --system --home /var/lib/edge-agent --shell /usr/sbin/nologin edge-agent
+# ---------------------------------------------------------------------------
+[Unit]
+Description=Secure Edge Fleet Agent
+Documentation=https://github.com/ccarrylab/aws-iot-secure-edge-fleet
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=edge-agent
+Group=edge-agent
+WorkingDirectory=/var/lib/edge-agent
+
+# Runs BEFORE the application. Performs a purely local rollback if the last
+# activation was never confirmed (see ota-boot-guard.sh).
+ExecStartPre=/usr/local/bin/ota-boot-guard.sh
+ExecStart=/var/lib/edge-agent/packages/current/bin/agent
+
+Restart=always
+RestartSec=5
+
+# WatchdogSec is DISABLED on purpose.
+#
+# It requires the agent to call sd_notify(READY=1) and then keep sending
+# WATCHDOG=1 keepalives. The agent in this repo does not implement sd_notify
+# yet, so with "Type=notify" systemd would wait for a readiness notification
+# that never arrives, hit the timeout, and restart the unit in a loop on every
+# device.
+#
+# Re-enable BOTH parts once the agent calls sd_notify:
+#     Type=notify
+#     WatchdogSec=120
+# That is what turns "the release will not start" into an automatic rollback
+# instead of a boot-loop.
+# WatchdogSec=120
+
+# --- hardening -------------------------------------------------------------
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no       # set yes if your payload does not JIT
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/edge-agent
+
+# NOTE ON noexec: do NOT add NoExecPaths=/var/lib/edge-agent if the payload
+# itself lives there — the agent has to execute the release it just installed.
+# Instead, keep the download/staging area separate and mount THAT noexec.
+
+[Install]
+WantedBy=multi-user.target
