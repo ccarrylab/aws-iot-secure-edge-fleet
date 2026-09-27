@@ -27,5 +27,12 @@ venv/
 *.crt
 packages/*.tar.gz
 packages/*.zip
-device-agent/certs/
+device-agent/certs/*
+!device-agent/certs/AmazonRootCA1.pem
 device-agent/packages/
+
+# hardening work artifacts
+*.bak.*
+.coverage
+dist/
+.claude/

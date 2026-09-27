@@ -17,52 +17,7 @@ resource "aws_iot_thing_group" "edge_fleet" {
 }
 
 # IoT Policy for devices
-resource "aws_iot_policy" "device_policy" {
-  name = "${var.project_name}-device-policy"
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "iot:Connect",
-          "iot:Publish",
-          "iot:Subscribe",
-          "iot:Receive",
-          "iot:GetThingShadow",
-          "iot:UpdateThingShadow",
-          "iot:DeleteThingShadow"
-        ]
-        Resource = [
-          "arn:aws:iot:${var.aws_region}:*:client/${var.project_name}-*",
-          "arn:aws:iot:${var.aws_region}:*:topic/${var.project_name}/*",
-          "arn:aws:iot:${var.aws_region}:*:topicfilter/${var.project_name}/*",
-          "arn:aws:iot:${var.aws_region}:*:topic/$aws/things/*/jobs/*",
-          "arn:aws:iot:${var.aws_region}:*:topicfilter/$aws/things/*/jobs/*"
-        ]
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "iot:DescribeJobExecution",
-          "iot:GetPendingJobExecutions",
-          "iot:StartNextPendingJobExecution",
-          "iot:UpdateJobExecution"
-        ]
-        Resource = "*"
-      }
-    ]
-  })
-}
-
 # S3 bucket for OTA packages
-resource "aws_s3_bucket" "ota_packages" {
-  bucket = "${var.project_name}-ota-packages-${var.environment}"
-
-  force_destroy = true # useful for development
-}
-
 resource "aws_s3_bucket_versioning" "ota_packages" {
   bucket = aws_s3_bucket.ota_packages.id
 
@@ -97,49 +52,6 @@ resource "aws_iam_role" "fleet_provisioning" {
           Service = "iot.amazonaws.com"
         }
         Action = "sts:AssumeRole"
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy" "fleet_provisioning" {
-  name = "${var.project_name}-fleet-provisioning-policy"
-  role = aws_iam_role.fleet_provisioning.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "iot:AddThingToThingGroup",
-          "iot:AttachPolicy",
-          "iot:AttachPrincipalPolicy",
-          "iot:AttachThingPrincipal",
-          "iot:CreateCertificateFromCsr",
-          "iot:CreatePolicy",
-          "iot:CreateThing",
-          "iot:DescribeCertificate",
-          "iot:DescribeThing",
-          "iot:DescribeThingGroup",
-          "iot:DescribeThingType",
-          "iot:DetachThingPrincipal",
-          "iot:GetPolicy",
-          "iot:ListAttachedPolicies",
-          "iot:ListPolicyPrincipals",
-          "iot:ListPrincipalPolicies",
-          "iot:ListPrincipalThings",
-          "iot:ListThingGroups",
-          "iot:ListThingGroupsForThing",
-          "iot:ListThingPrincipals",
-          "iot:RegisterCertificate",
-          "iot:RegisterThing",
-          "iot:RemoveThingFromThingGroup",
-          "iot:UpdateCertificate",
-          "iot:UpdateThing",
-          "iot:UpdateThingGroupsForThing"
-        ]
-        Resource = "*"
       }
     ]
   })
