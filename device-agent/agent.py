@@ -4,7 +4,7 @@ Secure Edge Fleet Device Agent
 - Fleet Provisioning by Claim (full handshake)
 - Switches to permanent device certificate
 - Basic telemetry
-- Ready for OTA Jobs (next step)
+- AWS IoT Jobs + OTA with automatic rollback
 """
 
 import time
@@ -17,6 +17,8 @@ from pathlib import Path
 from awsiot import mqtt_connection_builder
 from awscrt import mqtt
 
+from ota_handler import OTAHandler
+
 # -------------------------------------------------
 # Configuration
 # -------------------------------------------------
@@ -28,7 +30,6 @@ CLAIM_CERT = CERTS_DIR / "claim-certificate.pem"
 CLAIM_KEY = CERTS_DIR / "claim-private.key"
 ROOT_CA = CERTS_DIR / "AmazonRootCA1.pem"
 
-# After successful provisioning these will be written here
 DEVICE_CERT = CERTS_DIR / "device-certificate.pem"
 DEVICE_KEY = CERTS_DIR / "device-private.key"
 THING_NAME_FILE = CERTS_DIR / "thing_name.txt"
@@ -37,16 +38,13 @@ SERIAL_NUMBER = str(uuid.uuid4())[:8]
 THING_NAME = None
 
 
-# -------------------------------------------------
-# Helpers
-# -------------------------------------------------
 def ensure_root_ca():
     if not ROOT_CA.exists():
         print("Downloading Amazon Root CA...")
         import urllib.request
         urllib.request.urlretrieve(
             "https://www.amazontrust.com/repository/AmazonRootCA1.pem",
-            ROOT_CA
+            ROOT_CA,
         )
         print("Root CA downloaded.")
 
@@ -56,7 +54,6 @@ def save_device_credentials(cert_pem: str, key_pem: str, thing_name: str):
     DEVICE_CERT.write_text(cert_pem)
     DEVICE_KEY.write_text(key_pem)
     THING_NAME_FILE.write_text(thing_name)
-    # Restrict permissions
     os.chmod(DEVICE_CERT, 0o600)
     os.chmod(DEVICE_KEY, 0o600)
     print(f"Saved permanent credentials for thing: {thing_name}")
@@ -68,9 +65,6 @@ def load_existing_thing():
     return None
 
 
-# -------------------------------------------------
-# Callbacks
-# -------------------------------------------------
 def on_connection_interrupted(connection, error, **kwargs):
     print(f"Connection interrupted: {error}")
 
@@ -86,7 +80,6 @@ class FleetProvisioner:
     def __init__(self, mqtt_connection):
         self.mqtt = mqtt_connection
         self.ownership_token = None
-        self.certificate_id = None
         self.certificate_pem = None
         self.private_key = None
         self.thing_name = None
@@ -94,61 +87,51 @@ class FleetProvisioner:
         self.error = None
 
     def start(self):
-        # Subscribe to certificate creation responses
         self.mqtt.subscribe(
             topic="$aws/certificates/create/json/accepted",
             qos=mqtt.QoS.AT_LEAST_ONCE,
-            callback=self._on_create_accepted
+            callback=self._on_create_accepted,
         )
         self.mqtt.subscribe(
             topic="$aws/certificates/create/json/rejected",
             qos=mqtt.QoS.AT_LEAST_ONCE,
-            callback=self._on_create_rejected
+            callback=self._on_create_rejected,
         )
-
-        # Subscribe to RegisterThing responses
         provision_base = f"$aws/provisioning-templates/{TEMPLATE_NAME}/provision/json"
         self.mqtt.subscribe(
             topic=f"{provision_base}/accepted",
             qos=mqtt.QoS.AT_LEAST_ONCE,
-            callback=self._on_register_accepted
+            callback=self._on_register_accepted,
         )
         self.mqtt.subscribe(
             topic=f"{provision_base}/rejected",
             qos=mqtt.QoS.AT_LEAST_ONCE,
-            callback=self._on_register_rejected
+            callback=self._on_register_rejected,
         )
-
-        time.sleep(1)  # give subscriptions a moment
-
+        time.sleep(1)
         print("Requesting new device certificate...")
         self.mqtt.publish(
             topic="$aws/certificates/create/json",
             payload=json.dumps({}),
-            qos=mqtt.QoS.AT_LEAST_ONCE
+            qos=mqtt.QoS.AT_LEAST_ONCE,
         )
 
     def _on_create_accepted(self, topic, payload, dup, qos, retain, **kwargs):
         data = json.loads(payload)
         print("Certificate create accepted")
         self.ownership_token = data["certificateOwnershipToken"]
-        self.certificate_id = data["certificateId"]
         self.certificate_pem = data["certificatePem"]
         self.private_key = data["privateKey"]
-
-        # Now register the thing
         register_payload = {
             "certificateOwnershipToken": self.ownership_token,
-            "parameters": {
-                "SerialNumber": SERIAL_NUMBER
-            }
+            "parameters": {"SerialNumber": SERIAL_NUMBER},
         }
         topic = f"$aws/provisioning-templates/{TEMPLATE_NAME}/provision/json"
         print(f"Registering thing with template {TEMPLATE_NAME}...")
         self.mqtt.publish(
             topic=topic,
             payload=json.dumps(register_payload),
-            qos=mqtt.QoS.AT_LEAST_ONCE
+            qos=mqtt.QoS.AT_LEAST_ONCE,
         )
 
     def _on_create_rejected(self, topic, payload, dup, qos, retain, **kwargs):
@@ -161,12 +144,7 @@ class FleetProvisioner:
         data = json.loads(payload)
         print("RegisterThing accepted")
         self.thing_name = data["thingName"]
-        # deviceConfiguration can also appear here if defined in template
-        save_device_credentials(
-            self.certificate_pem,
-            self.private_key,
-            self.thing_name
-        )
+        save_device_credentials(self.certificate_pem, self.private_key, self.thing_name)
         self.done = True
 
     def _on_register_rejected(self, topic, payload, dup, qos, retain, **kwargs):
@@ -175,7 +153,7 @@ class FleetProvisioner:
         print(self.error)
         self.done = True
 
-    def wait(self, timeout=60):
+    def wait(self, timeout=90):
         start = time.time()
         while not self.done and (time.time() - start) < timeout:
             time.sleep(0.5)
@@ -191,7 +169,6 @@ def main():
     global THING_NAME
     ensure_root_ca()
 
-    # Reuse existing permanent credentials if present
     existing = load_existing_thing()
     if existing:
         print(f"Found existing device credentials for: {existing}")
@@ -214,29 +191,23 @@ def main():
         clean_session=False,
         keep_alive_secs=30,
         on_connection_interrupted=on_connection_interrupted,
-        on_connection_resumed=on_connection_resumed
+        on_connection_resumed=on_connection_resumed,
     )
 
     print(f"Connecting as {client_id}...")
-    connect_future = mqtt_connection.connect()
-    connect_future.result()
+    mqtt_connection.connect().result()
     print("Connected!")
 
-    # Run provisioning if needed
     if THING_NAME is None:
         provisioner = FleetProvisioner(mqtt_connection)
         provisioner.start()
-        success = provisioner.wait(timeout=90)
-
-        if not success:
+        if not provisioner.wait():
             print(f"Provisioning failed: {provisioner.error}")
             mqtt_connection.disconnect().result()
             sys.exit(1)
 
         THING_NAME = provisioner.thing_name
         print(f"Provisioning complete. Thing name: {THING_NAME}")
-
-        # Disconnect claim connection and reconnect with permanent cert
         print("Switching to permanent device certificate...")
         mqtt_connection.disconnect().result()
 
@@ -249,26 +220,91 @@ def main():
             clean_session=False,
             keep_alive_secs=30,
             on_connection_interrupted=on_connection_interrupted,
-            on_connection_resumed=on_connection_resumed
+            on_connection_resumed=on_connection_resumed,
         )
         mqtt_connection.connect().result()
         print("Reconnected with permanent credentials.")
 
+    # -------------------------------------------------
+    # OTA Jobs
+    # -------------------------------------------------
+    current_job_id = {"id": None}
+
+    def publish_job_update(status: str, details: dict):
+        job_id = current_job_id["id"]
+        if not job_id:
+            return
+        payload = {
+            "status": status,
+            "statusDetails": {k: str(v) for k, v in details.items()},
+        }
+        topic = f"$aws/things/{THING_NAME}/jobs/{job_id}/update"
+        mqtt_connection.publish(
+            topic=topic,
+            payload=json.dumps(payload),
+            qos=mqtt.QoS.AT_LEAST_ONCE,
+        )
+        print(f"[Jobs] Reported {status} for job {job_id}")
+
+    ota = OTAHandler(on_status=publish_job_update)
+
+    def on_job_message(topic, payload, dup, qos, retain, **kwargs):
+        try:
+            data = json.loads(payload)
+        except Exception:
+            return
+        execution = data.get("execution") or data
+        job_id = execution.get("jobId")
+        document = execution.get("jobDocument") or {}
+        if not job_id:
+            return
+        # Ignore if already terminal
+        status = execution.get("status")
+        if status in ("SUCCEEDED", "FAILED", "CANCELED", "REJECTED", "REMOVED"):
+            return
+        print(f"[Jobs] Received job {job_id}: {document}")
+        current_job_id["id"] = job_id
+        publish_job_update("IN_PROGRESS", {"step": "received"})
+        ota.handle_job(document)
+
+    jobs_get_accepted = f"$aws/things/{THING_NAME}/jobs/$next/get/accepted"
+    jobs_notify = f"$aws/things/{THING_NAME}/jobs/notify-next"
+
+    mqtt_connection.subscribe(
+        topic=jobs_get_accepted,
+        qos=mqtt.QoS.AT_LEAST_ONCE,
+        callback=on_job_message,
+    )
+    mqtt_connection.subscribe(
+        topic=jobs_notify,
+        qos=mqtt.QoS.AT_LEAST_ONCE,
+        callback=on_job_message,
+    )
+
+    # Request any pending job
+    mqtt_connection.publish(
+        topic=f"$aws/things/{THING_NAME}/jobs/$next/get",
+        payload=json.dumps({}),
+        qos=mqtt.QoS.AT_LEAST_ONCE,
+    )
+    print("[Jobs] Subscribed and requested next pending job")
+
+    # -------------------------------------------------
     # Telemetry loop
+    # -------------------------------------------------
     print("Entering telemetry loop (Ctrl+C to stop)...")
     try:
         while True:
             telemetry = {
-                "serial": SERIAL_NUMBER if THING_NAME is None else THING_NAME,
                 "thingName": THING_NAME,
                 "status": "online",
-                "timestamp": int(time.time())
+                "timestamp": int(time.time()),
             }
             topic = f"secure-edge-fleet/telemetry/{THING_NAME}"
             mqtt_connection.publish(
                 topic=topic,
                 payload=json.dumps(telemetry),
-                qos=mqtt.QoS.AT_LEAST_ONCE
+                qos=mqtt.QoS.AT_LEAST_ONCE,
             )
             print(f"Published telemetry → {topic}")
             time.sleep(30)
