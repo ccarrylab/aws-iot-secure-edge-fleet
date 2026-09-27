@@ -6,6 +6,8 @@ Zero-touch device provisioning and safe OTA updates for AWS IoT, built with Terr
 [![Python](https://img.shields.io/badge/Python-3.9+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
+> **Status:** early-stage reference implementation. The provisioning and OTA flows work end to end, but this hasn't been hardened for production fleets yet — see [Security notes](#security-notes) before deploying beyond a dev environment.
+
 Devices provision themselves on first boot using a shared claim certificate, then get a unique permanent identity — no manual per-device setup. OTA updates are delivered through AWS IoT Jobs, verified against a checksum, and rolled back automatically if the health check fails after install.
 
 ## Features
@@ -18,25 +20,32 @@ Devices provision themselves on first boot using a shared claim certificate, the
 ## Architecture
 
 ```
-AWS Cloud                              Edge Device
-----------                             -----------
-Terraform manages:        MQTT/TLS     device-agent (Python)
-  - Thing Group          <-------->      1. Connect with claim cert
-  - IoT Policies                         2. Request new certificate
-  - Provisioning Template                3. RegisterThing (template)
-  - S3 OTA bucket                        4. Save permanent identity
-                                          5. Reconnect as the Thing
+AWS Cloud                                  Edge Device
+----------                                 -----------
+Terraform manages:                         device-agent (Python):
+  - Thing Group                              1. Connect with claim cert
+  - IoT Policies                MQTT/TLS     2. Request new certificate
+  - Provisioning Template      <-------->    3. RegisterThing (template)
+  - S3 OTA bucket                             4. Save permanent identity
+                                              5. Reconnect as the Thing
+
 IoT Jobs -------------------------->
-  (OTA deployment)                     OTA Handler:
-                                          download -> verify -> extract
-Telemetry <--------------------------    -> activate -> health check
+(OTA deployment)                           OTA Handler:
+                                              download -> verify -> extract
+Telemetry <--------------------------        -> activate -> health check
 ```
 
 ### Provisioning flow (first boot)
 
 1. Device generates a serial number and connects as `claim-<serial>` using the fleet claim certificate.
 2. Publishes to `$aws/certificates/create/json` to generate a new key pair and certificate.
-3. Publishes to `$aws/provisioning-templates/<template>/provision/json`. The template registers the Thing, activates the certificate, attaches the policy, and adds it to the Thing Group.
+3. Publishes to the provisioning template's registration topic:
+
+```
+   $aws/provisioning-templates/<template>/provision/json
+```
+
+   The template registers the Thing, activates the certificate, attaches the policy, and adds it to the Thing Group.
 4. Reconnects using the permanent device certificate — the claim cert never touches the device again.
 5. Credentials are saved to `certs/` and persist across reboots, so provisioning only happens once.
 
@@ -73,7 +82,12 @@ aws-iot-secure-edge-fleet/
 
 ## Getting started
 
-Requires AWS CLI, Terraform ≥ 1.3, and Python ≥ 3.9.
+**Prerequisites:**
+
+- An AWS account with IoT Core enabled, and credentials configured for the AWS CLI
+- IAM permissions to create IoT things/policies/certificates, an S3 bucket, and to run Terraform in your account
+- Terraform ≥ 1.3
+- Python ≥ 3.9
 
 **1. Deploy infrastructure**
 
