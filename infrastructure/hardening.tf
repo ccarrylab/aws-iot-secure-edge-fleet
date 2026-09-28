@@ -73,6 +73,19 @@ resource "aws_iot_policy" "device_policy" {
           "iot:UpdateJobExecution"
         ]
         Resource = ["${local.iot_arn}:thing/$${iot:Connection.Thing.ThingName}"]
+      },
+      {
+        # Lets the device exchange its OWN certificate for short-lived IAM
+        # credentials, which it then uses to read its release object from S3.
+        # This is what removes the 7-day presigned-URL expiry: nothing is
+        # presigned, so an offline device can still update weeks later.
+        #
+        # Scoped to the single role alias. Without this statement the agent
+        # gets AccessDenied from the credential provider and no OTA at all.
+        Sid      = "AssumeOtaReadRole"
+        Effect   = "Allow"
+        Action   = ["iot:AssumeRoleWithCertificate"]
+        Resource = ["${local.iot_arn}:rolealias/${var.project_name}-device-ota-read"]
       }
     ]
   })
@@ -155,6 +168,15 @@ resource "aws_kms_key" "ota" {
   description             = "Encryption for ${var.project_name} OTA packages"
   deletion_window_in_days = 30
   enable_key_rotation     = true
+}
+
+resource "aws_kms_alias" "ota" {
+  # The alias the publish tooling refers to ("alias/<project>-ota").
+  # Without this the key exists but nothing can name it, and
+  # `publish_release.py --kms-key alias/...` fails with NotFoundException.
+  # An alias also survives key rotation; a raw key id does not.
+  name          = "alias/${var.project_name}-ota"
+  target_key_id = aws_kms_key.ota.key_id
 }
 
 resource "aws_s3_bucket" "ota_packages" {

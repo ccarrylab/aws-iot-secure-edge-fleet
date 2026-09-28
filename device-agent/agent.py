@@ -25,7 +25,7 @@ from pathlib import Path
 from awsiot import mqtt_connection_builder
 from awscrt import mqtt
 
-from ota_handler import OTAHandler
+from ota_handler import OTAHandler, MAX_DOWNLOAD_BYTES
 
 
 # -------------------------------------------------
@@ -90,6 +90,13 @@ DEVICE_CERT = CERTS_DIR / "device-certificate.pem"
 DEVICE_KEY = CERTS_DIR / "device-private.key"
 THING_NAME_FILE = CERTS_DIR / "thing_name.txt"
 SERIAL_FILE = CERTS_DIR / "serial"
+
+# Optional: IoT role alias for the credential provider. When set, the agent
+# mints short-lived AWS credentials from its own certificate and reads OTA
+# objects straight from S3, so nothing expires. When unset it falls back to the
+# presigned packageUrl, which is what every release before this did.
+ROLE_ALIAS = os.environ.get("OTA_ROLE_ALIAS", "").strip()
+AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 
 STATE_DIR_DEFAULT = "/var/lib/edge-agent"
 
@@ -640,7 +647,40 @@ def main():
             return
         publish_job_update(status, details)
 
-    ota = OTAHandler(on_status=on_ota_status, health_check_cmd=HEALTH_CHECK_CMD)
+    # Wire the credential-provider fetcher only when an alias is configured.
+    # Absent it, the handler keeps requiring a presigned https packageUrl, so
+    # this is a no-op for fleets that have not adopted the S3 path yet.
+    ota_fetcher = None
+    if ROLE_ALIAS:
+        try:
+            from s3_fetch import make_fetcher
+
+            ota_fetcher = make_fetcher(
+                endpoint=IOT_ENDPOINT,
+                role_alias=ROLE_ALIAS,
+                thing_name=THING_NAME,
+                cert_path=str(DEVICE_CERT),
+                key_path=str(DEVICE_KEY),
+                ca_path=str(ROOT_CA),
+                region=AWS_REGION,
+                # FIX: thread OTAHandler's own size cap through explicitly, so
+                # the S3 path and the HTTPS path share one source of truth for
+                # the maximum package size instead of s3_fetch silently using
+                # its own separate default.
+                max_bytes=MAX_DOWNLOAD_BYTES,
+            )
+            log.info("OTA downloads will use the credential provider (alias %s)", ROLE_ALIAS)
+        except Exception:
+            log.exception("could not build the S3 fetcher - falling back to presigned URLs")
+            ota_fetcher = None
+    else:
+        log.info("OTA_ROLE_ALIAS not set - using presigned packageUrl")
+
+    ota = OTAHandler(
+        on_status=on_ota_status,
+        health_check_cmd=HEALTH_CHECK_CMD,
+        fetcher=ota_fetcher,
+    )
 
     def on_job_message(topic, payload, dup, qos, retain, **kwargs):
         try:
