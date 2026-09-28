@@ -57,12 +57,13 @@ Create an IoT Job with a document like:
 {
   "version": "1.2.0",
   "packageUrl": "https://<ota-bucket>.s3.amazonaws.com/releases/app-1.2.0.tar.gz",
+  "packageS3Uri": "s3://<ota-bucket>/releases/app-1.2.0.tar.gz",
   "checksum": "<sha256-hex>",
   "rollbackVersion": "1.1.0"
 }
 ```
 
-The agent downloads the package, verifies the checksum, extracts it (guarded against path traversal), activates it via symlink swap, and runs a health check. On success it reports `SUCCEEDED`; on failure it reports `FAILED` and rolls back to the previous version automatically.
+When `OTA_ROLE_ALIAS` is set the agent prefers `packageS3Uri` and fetches via the IoT credential provider (no 7-day URL expiry); otherwise it uses the presigned `packageUrl`. Either way it verifies the checksum, extracts it (guarded against path traversal), activates via symlink swap, and runs a health check. On success it reports `SUCCEEDED`; on failure it reports `FAILED` and rolls back automatically.
 
 ## Repository structure
 
@@ -72,11 +73,16 @@ aws-iot-secure-edge-fleet/
 │   ├── providers.tf      # AWS provider
 │   ├── variables.tf      # region, environment, project_name
 │   ├── main.tf            # Thing Group, policies, S3, provisioning template
+│   ├── hardening.tf       # device policy, KMS OTA bucket, publisher policy
+│   ├── release-path.tf    # device OTA-read role + IoT role alias
 │   └── outputs.tf         # Names/ARNs needed by the agent
 ├── device-agent/
 │   ├── agent.py            # Provisioning, Jobs listener, telemetry loop
 │   ├── ota_handler.py      # Download/verify/extract/activate/rollback
-│   └── requirements.txt   # awsiotsdk, boto3, requests
+│   ├── s3_fetch.py         # Credential-provider S3 download (no URL expiry)
+│   ├── requirements.txt   # awsiotsdk, boto3, requests
+│   └── tests/              # pytest for ota_handler + s3_fetch
+├── publish_release.py     # package -> hash -> upload -> create job
 └── LICENSE                # MIT
 ```
 
