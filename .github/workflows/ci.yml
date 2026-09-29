@@ -63,3 +63,30 @@ jobs:
           name: coverage-report
           path: device-agent/.coverage
           include-hidden-files: true
+
+  security:
+    name: Security scans (advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install scanners
+        run: |
+          python -m pip install --upgrade pip
+          pip install bandit pip-audit checkov
+
+      - name: Bandit (Python static analysis)
+        continue-on-error: true
+        run: bandit -r device-agent publish_release.py -x device-agent/tests
+
+      - name: pip-audit (dependency CVEs)
+        continue-on-error: true
+        run: pip-audit -r device-agent/requirements.txt
+
+      - name: Checkov (Terraform misconfigurations)
+        continue-on-error: true
+        run: checkov -d infrastructure --quiet --compact
