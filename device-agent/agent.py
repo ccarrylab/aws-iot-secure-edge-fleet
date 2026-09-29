@@ -376,6 +376,7 @@ def build_connection(client_id: str, cert: Path, key: Path, clean_session: bool,
             {"thingName": client_id, "status": "offline", "timestamp": 0}
         ),
         qos=mqtt.QoS.AT_LEAST_ONCE,
+        retain=False,  # required by the real awscrt Will()
     )
 
     def on_connection_interrupted(connection, error, **kwargs):
