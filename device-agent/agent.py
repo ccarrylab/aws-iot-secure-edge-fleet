@@ -568,8 +568,8 @@ def main():
             log.error("provisioning failed: %s", provisioner.error)
             try:
                 claim_connection.disconnect().result()
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("claim disconnect failed: %s", e)
             sys.exit(1)
 
         THING_NAME = provisioner.thing_name
