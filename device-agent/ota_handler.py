@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import subprocess  # nosec B404 - argv list, never a shell; command is device config, not job input
 import tarfile
 import time
 import urllib.request
@@ -233,7 +234,7 @@ class OTAHandler:
         for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
             try:
                 print("[OTA] Downloading %s -> %s (attempt %d)" % (url, dest, attempt))
-                with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT_S) as resp:
+                with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT_S) as resp:  # nosec B310 - handle_job() rejects non-https URLs first
                     declared = resp.headers.get("Content-Length")
                     if declared and declared.isdigit() and int(declared) > MAX_DOWNLOAD_BYTES:
                         raise RuntimeError("Package too large: %s bytes" % declared)
@@ -347,7 +348,7 @@ class OTAHandler:
             except TypeError:
                 # filter= exists on 3.9.17+/3.10.12+/3.11.4+/3.12+; the explicit
                 # checks above keep older patch levels safe.
-                tar.extractall(root)
+                tar.extractall(root)  # nosec B202 - members validated above (no links/devices, contained paths, size caps); fallback for Pythons without filter=
 
         # Swap into place only after a completely clean unpack.
         if install_dir.is_symlink():
@@ -408,9 +409,8 @@ class OTAHandler:
             return has_payload
 
         print("[OTA] Running health check: %s" % (self.health_check_cmd,))
-        subprocess = __import__("subprocess")
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603 - argv list, no shell; command comes from device env config
                 self.health_check_cmd,
                 timeout=self.health_check_timeout,
                 capture_output=True,
