@@ -207,10 +207,6 @@ def test_existing_serial_is_honored(certs):
     assert agent.load_or_create_serial() == "preset"
 
 
-@pytest.mark.xfail(
-    reason="a crash between the O_EXCL create and the write leaves an empty serial "
-    "file that is never repaired; provisioning would use serial ''"
-)
 def test_empty_serial_file_is_repaired(certs, monkeypatch):
     monkeypatch.setattr(agent, "_hardware_serial", lambda: None)
     certs.mkdir(parents=True)

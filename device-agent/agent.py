@@ -282,9 +282,8 @@ def _hardware_serial():
 def load_or_create_serial() -> str:
     """Stable device identity, persisted on first boot.
 
-    The previous value was regenerated on every process start, so an
-    interrupted provisioning left an orphan Thing with a live certificate and
-    the retry minted another. A fresh uuid4 hex prefix is also only 32 bits.
+    Published atomically (temp file, then hard link), so it is never observed
+    empty. An empty file left by an older crash is discarded and regenerated.
     """
     CERTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -292,20 +291,24 @@ def load_or_create_serial() -> str:
         existing = SERIAL_FILE.read_text(encoding="utf-8").strip()
         if existing:
             return existing
+        SERIAL_FILE.unlink(missing_ok=True)
     except FileNotFoundError:
         pass
 
     serial = _hardware_serial() or secrets.token_hex(8)
-    try:
-        # O_EXCL: two racing processes can never disagree about the serial.
-        fd = os.open(SERIAL_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
-        return SERIAL_FILE.read_text(encoding="utf-8").strip()
+    tmp = SERIAL_FILE.with_name("%s.%d.tmp" % (SERIAL_FILE.name, os.getpid()))
+    fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     try:
         os.write(fd, serial.encode())
         os.fsync(fd)
     finally:
         os.close(fd)
+    try:
+        os.link(tmp, SERIAL_FILE)  # atomic; fails if another process won the race
+    except FileExistsError:
+        return SERIAL_FILE.read_text(encoding="utf-8").strip()
+    finally:
+        tmp.unlink(missing_ok=True)
     log.info("generated device serial: %s", serial)
     return serial
 
