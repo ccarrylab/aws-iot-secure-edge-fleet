@@ -44,11 +44,16 @@ class OTAHandler:
         health_check_cmd: Optional[list] = None,
         health_check_timeout: int = 30,
         allow_reinstall: bool = False,
+        fetcher=None,
     ):
         self.on_status = on_status or (lambda s, d: None)
         self.health_check_cmd = health_check_cmd
         self.health_check_timeout = health_check_timeout
         self.allow_reinstall = allow_reinstall
+        # Optional callable (uri, dest) -> None that reads an s3:// object using
+        # temporary credentials from the IoT credential provider. When absent,
+        # the handler requires a presigned https packageUrl exactly as before.
+        self.fetcher = fetcher
         PACKAGES_DIR.mkdir(exist_ok=True)
 
     # ------------------------------------------------------------------
@@ -103,9 +108,19 @@ class OTAHandler:
             return False
 
         package_url = job_document.get("packageUrl")
+        package_s3_uri = job_document.get("packageS3Uri")
         rollback_version = job_document.get("rollbackVersion")
 
-        if not package_url or not isinstance(package_url, str):
+        # Prefer the s3:// path when the device can mint its own credentials:
+        # a presigned URL expires (SigV4 caps at 7 days), so a device that is
+        # offline longer than that receives a job it can never download.
+        use_s3 = bool(package_s3_uri) and self.fetcher is not None
+
+        if use_s3:
+            if not isinstance(package_s3_uri, str) or not package_s3_uri.startswith("s3://"):
+                self._fail("packageS3Uri must be an s3:// URI")
+                return False
+        elif not package_url or not isinstance(package_url, str):
             self._fail("Invalid job document: missing packageUrl")
             return False
 
@@ -115,8 +130,9 @@ class OTAHandler:
             self._fail("Job document must include a valid sha256 checksum")
             return False
 
-        # 3. never fetch a package over plaintext.
-        if not package_url.lower().startswith("https://"):
+        # 3. never fetch a package over plaintext. The s3 lane is SigV4 over
+        #    TLS and carries no URL, so it is exempt from this specific check.
+        if not use_s3 and not package_url.lower().startswith("https://"):
             self._fail("Refusing non-HTTPS package URL: %s" % package_url)
             return False
 
@@ -146,7 +162,10 @@ class OTAHandler:
 
         try:
             self._check_disk_space()
-            tarball = self._download(package_url, version)
+            if use_s3:
+                tarball = self._download_s3(package_s3_uri, version)
+            else:
+                tarball = self._download(package_url, version)
             self.on_status("IN_PROGRESS", {"version": version, "step": "verify"})
 
             if not self._verify_checksum(tarball, checksum):
@@ -240,6 +259,37 @@ class OTAHandler:
                 if attempt < DOWNLOAD_ATTEMPTS:
                     time.sleep(attempt)
         raise RuntimeError("Download failed after %d attempts: %s" % (DOWNLOAD_ATTEMPTS, last_error))
+
+    def _download_s3(self, s3_uri: str, version: str) -> Path:
+        """Read the object with temporary credentials, atomically.
+
+        Same contract as _download: stream to a .part file, then rename, so a
+        partial read can never masquerade as a complete package. The fetcher
+        owns the credentials exchange; this method owns retries, the size cap
+        and the atomic rename.
+        """
+        version = self._safe_version(version)
+        dest = PACKAGES_DIR / ("%s.tar.gz" % version)
+        part = dest.with_name(dest.name + ".part")
+
+        last_error = None
+        for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+            try:
+                print("[OTA] Fetching %s -> %s (attempt %d)" % (s3_uri, dest, attempt))
+                self.fetcher(s3_uri, part)
+                size = part.stat().st_size
+                if size > MAX_DOWNLOAD_BYTES:
+                    raise RuntimeError("Package too large: %s bytes" % size)
+                if size == 0:
+                    raise RuntimeError("Package is empty")
+                os.replace(part, dest)
+                return dest
+            except Exception as e:
+                last_error = e
+                part.unlink(missing_ok=True)
+                if attempt < DOWNLOAD_ATTEMPTS:
+                    time.sleep(attempt)
+        raise RuntimeError("S3 fetch failed after %d attempts: %s" % (DOWNLOAD_ATTEMPTS, last_error))
 
     def _verify_checksum(self, path: Path, expected: str) -> bool:
         actual = self._sha256(path)

@@ -168,7 +168,7 @@ def sha256_file(path):
 # 2-4. document
 # ---------------------------------------------------------------------------
 
-def build_document(version, package_url, checksum, rollback_version=None):
+def build_document(version, package_url, checksum, rollback_version=None, s3_uri=None):
     """Exactly the fields ota_handler.handle_job() reads, and nothing it guesses."""
     doc = {
         "version": version,
@@ -178,6 +178,12 @@ def build_document(version, package_url, checksum, rollback_version=None):
     }
     if rollback_version:
         doc["rollbackVersion"] = rollback_version
+    # Emitted always in practice (computed from bucket + version in main).
+    # A presigned URL dies after 7 days, so a device offline longer receives a
+    # job it can never download; the s3:// path has no such cliff. Older agents
+    # ignore the field and read packageUrl, so BOTH are always emitted.
+    if s3_uri:
+        doc["packageS3Uri"] = s3_uri
     return doc
 
 
@@ -367,7 +373,8 @@ def main(argv=None):
     else:
         info("  rollbackVersion: none - no completed job found; devices keep their own previous")
 
-    document = build_document(args.version, url, checksum, rollback)
+    s3_uri = "s3://%s/packages/%s.tar.gz" % (args.bucket, args.version)
+    document = build_document(args.version, url, checksum, rollback, s3_uri=s3_uri)
     doc_path = os.path.join(tmpdir, "job-document.json")
     with open(doc_path, "w") as fh:
         json.dump(document, fh, indent=2, sort_keys=True)

@@ -59,12 +59,15 @@ Releases are published with `publish_release.py`, which produces a job document 
 {
   "version": "1.2.0",
   "packageUrl": "https://<ota-bucket>.s3.amazonaws.com/packages/1.2.0.tar.gz?X-Amz-...",
+  "packageS3Uri": "s3://<ota-bucket>/packages/1.2.0.tar.gz",
   "checksum": "<sha256-hex>",
   "rollbackVersion": "1.1.0"
 }
 ```
 
-The agent validates the document (the `version` is treated as a label, never a path), downloads the package over HTTPS, verifies the checksum, extracts it into a staging directory (rejecting links, device nodes, and path escapes), activates it with an atomic symlink swap, and runs a health check.
+The agent validates the document (the `version` is treated as a label, never a path), downloads the package, verifies the checksum, extracts it into a staging directory (rejecting links, device nodes, and path escapes), activates it with an atomic symlink swap, and runs a health check.
+
+By default the package is downloaded over HTTPS from the presigned `packageUrl`. When `OTA_ROLE_ALIAS` is set, the agent instead prefers `packageS3Uri` and fetches it through the IoT credential provider, so there is no URL expiry.
 
 On a successful activation the agent does **not** report `SUCCEEDED` immediately. It arms the boot guard, restarts, and reports `SUCCEEDED` only after the new build has come up and passed its health check. If the new build never confirms, `ota-boot-guard.sh` rolls back to the previous version after 3 unconfirmed boots. If the update fails before activation completes, the agent reports `FAILED` and rolls back itself.
 
@@ -74,7 +77,7 @@ On a successful activation the agent does **not** report `SUCCEEDED` immediately
     --canary --thing-arn <arn>                                                  # one device, abort on first failure
 ```
 
-Presigned URLs cap at 7 days. A device that is offline longer than the URL lifetime receives a job it cannot download.
+Presigned URLs cap at 7 days, so a device that is offline longer than that receives a job it cannot download through `packageUrl`. Setting `OTA_ROLE_ALIAS` avoids this.
 
 ## Repository structure
 
@@ -85,16 +88,18 @@ aws-iot-secure-edge-fleet/
 │   ├── variables.tf         # region, environment, project_name (validated)
 │   ├── main.tf              # Thing Group, provisioning template, claim policy
 │   ├── hardening.tf         # device policy, provisioning role, KMS-encrypted OTA bucket, publisher policy
+│   ├── release-path.tf      # device OTA-read role + IoT role alias
 │   └── outputs.tf           # Names/ARNs needed by the agent
 ├── device-agent/
 │   ├── agent.py             # Provisioning, Jobs listener, boot guard, telemetry loop
 │   ├── ota_handler.py       # Download/verify/extract/activate/rollback
-│   ├── requirements.txt     # awsiotsdk
+│   ├── s3_fetch.py          # Credential-provider S3 download (no URL expiry)
+│   ├── requirements.txt     # awsiotsdk, boto3, requests
 │   ├── certs/               # AmazonRootCA1.pem is vendored; device/claim keys are gitignored
 │   ├── deploy/
 │   │   ├── edge-agent.service   # systemd unit (unprivileged user, watchdog, boot guard)
 │   │   └── ota-boot-guard.sh    # local rollback for a release that cannot start
-│   └── tests/               # pytest suite for ota_handler.py
+│   └── tests/               # pytest suite for ota_handler.py and s3_fetch.py
 ├── publish_release.py       # package -> hash -> upload -> verify -> create job
 ├── .github/workflows/ci.yml # terraform fmt/validate + pytest on Python 3.9/3.11/3.12
 └── LICENSE                  # MIT
