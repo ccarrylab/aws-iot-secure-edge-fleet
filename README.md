@@ -94,7 +94,7 @@ aws-iot-secure-edge-fleet/
 │   ├── agent.py             # Provisioning, Jobs listener, boot guard, telemetry loop
 │   ├── ota_handler.py       # Download/verify/extract/activate/rollback
 │   ├── s3_fetch.py          # Credential-provider S3 download (no URL expiry)
-│   ├── requirements.txt     # awsiotsdk
+│   ├── requirements.txt     # awsiotsdk, boto3, requests
 │   ├── certs/               # AmazonRootCA1.pem is vendored; device/claim keys are gitignored
 │   ├── deploy/
 │   │   ├── edge-agent.service   # systemd unit (unprivileged user, watchdog, boot guard)
