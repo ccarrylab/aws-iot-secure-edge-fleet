@@ -374,7 +374,7 @@ def build_connection(client_id: str, cert: Path, key: Path, clean_session: bool,
         topic="secure-edge-fleet/telemetry/%s" % client_id,
         payload=json.dumps(
             {"thingName": client_id, "status": "offline", "timestamp": 0}
-        ),
+        ).encode("utf-8"),  # the real Will() rejects str payloads
         qos=mqtt.QoS.AT_LEAST_ONCE,
         retain=False,  # required by the real awscrt Will()
     )
