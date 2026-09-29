@@ -39,7 +39,7 @@ import json
 import os
 import re
 import shutil
-import subprocess
+import subprocess  # nosec B404 - argv lists only, never a shell
 import sys
 import tarfile
 import tempfile
@@ -84,7 +84,7 @@ def run(cmd, dry_run=False):
     info("  $ " + " ".join(cmd))
     if dry_run:
         return ""
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,  # nosec B603 - argv list built by this script, no shell
                           universal_newlines=True)
     if proc.returncode != 0:
         die("command failed (%d): %s\n%s"
@@ -250,7 +250,7 @@ def verify_uploaded(url, expected_sha):
     info("  fetching the uploaded object to re-hash it ...")
     h = hashlib.sha256()
     total = 0
-    with urllib.request.urlopen(url, timeout=60) as resp:
+    with urllib.request.urlopen(url, timeout=60) as resp:  # nosec B310 - presigned https URL generated earlier in this script
         while True:
             chunk = resp.read(1 << 16)
             if not chunk:

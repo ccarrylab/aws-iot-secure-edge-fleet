@@ -165,6 +165,7 @@ resource "aws_iam_role_policy" "fleet_provisioning" {
 # H8 — the OTA bucket, treated as a supply chain rather than a scratch dir
 # ---------------------------------------------------------------------------
 resource "aws_kms_key" "ota" {
+  #checkov:skip=CKV2_AWS_64:Relies on the default key policy - tighten for production
   description             = "Encryption for ${var.project_name} OTA packages"
   deletion_window_in_days = 30
   enable_key_rotation     = true
@@ -180,6 +181,9 @@ resource "aws_kms_alias" "ota" {
 }
 
 resource "aws_s3_bucket" "ota_packages" {
+  #checkov:skip=CKV_AWS_18:Dev fleet - add a logging bucket before production
+  #checkov:skip=CKV_AWS_144:Single-region dev bucket - enable cross-region replication for production
+  #checkov:skip=CKV2_AWS_62:Nothing consumes bucket events yet
   bucket = "${var.project_name}-ota-packages-${var.environment}"
 
   # was: force_destroy = true (hardcoded) — a `terraform destroy` in prod would
@@ -236,6 +240,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "ota_packages" {
     status = "Enabled"
     filter {}
     noncurrent_version_expiration { noncurrent_days = 90 }
+    abort_incomplete_multipart_upload { days_after_initiation = 7 }
   }
 }
 
