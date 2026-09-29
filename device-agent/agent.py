@@ -739,6 +739,14 @@ def main():
         )
         log.debug("subscribed to job topics")
 
+    # A restart mid-confirmation means AWS still lists the activating job as
+    # IN_PROGRESS and hands it straight back on $next/get. Mark it as already
+    # started BEFORE subscribing, or the agent re-runs it: handle_job() refuses
+    # ("already installed") and reports FAILED, racing the real SUCCEEDED below.
+    _mid_confirmation = guard.read()
+    if _mid_confirmation and _mid_confirmation.get("jobId"):
+        started_jobs.add(_mid_confirmation["jobId"])
+
     resume_holder["fn"] = resubscribe
     resubscribe()
 
