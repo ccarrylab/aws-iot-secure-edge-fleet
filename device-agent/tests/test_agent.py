@@ -392,6 +392,7 @@ class FakeConnection:
         self.job = None
         self.job_status = "QUEUED"
         self.deliveries = 1
+        self.redeliver_on_get = False
         self.telemetry_error = None
         self._telemetry_calls = 0
 
@@ -414,9 +415,11 @@ class FakeConnection:
 
     def publish(self, topic, payload, qos):
         self.published.append((topic, json.loads(payload)))
+        if topic.endswith("/jobs/$next/get") and self.redeliver_on_get:
+            self._deliver()
         if topic.startswith("secure-edge-fleet/telemetry/"):
             self._telemetry_calls += 1
-            if self._telemetry_calls == 1 and self.job is not None:
+            if self._telemetry_calls == 1 and self.job is not None and not self.redeliver_on_get:
                 for _ in range(self.deliveries):
                     self._deliver()
             self._stop()
@@ -642,3 +645,17 @@ def test_provisioning_failure_exits_nonzero(env, monkeypatch):
         agent.main()
     assert exc.value.code == 1
     assert env.conn.disconnected
+
+
+def test_job_redelivered_mid_confirmation_is_not_rerun(env, monkeypatch):
+    """After a restart AWS hands back the still-IN_PROGRESS job. Re-running it
+    would report FAILED ("already installed") and race the real SUCCEEDED."""
+    agent.BootGuard(env.state).arm("1.1.0", "job-1", "1.2.0")
+    fake = make_fake_ota(healthy=True)
+    monkeypatch.setattr(agent, "OTAHandler", fake)
+    env.conn.job = {"version": "1.2.0"}
+    env.conn.job_status = "IN_PROGRESS"
+    env.conn.redeliver_on_get = True
+    agent.main()
+    assert fake.instances[0].handled == []
+    assert [b["status"] for b in job_updates(env.conn, "job-1")] == ["SUCCEEDED"]
