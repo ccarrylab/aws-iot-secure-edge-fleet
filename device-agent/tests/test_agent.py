@@ -256,6 +256,8 @@ def builder(certs, monkeypatch):
 
     class FakeWill:
         def __init__(self, topic, qos, payload, retain):  # no default: matches the real awscrt signature
+            if not isinstance(payload, bytes):  # the real awscrt Will() enforces this
+                raise TypeError("Will.payload must be bytes type")
             self.topic, self.qos, self.payload, self.retain = topic, qos, payload, retain
 
     monkeypatch.setattr(agent.mqtt, "Will", FakeWill)
@@ -278,6 +280,7 @@ def test_build_connection_registers_offline_will(builder):
     will = builder["will"]
     assert will.topic == "secure-edge-fleet/telemetry/dev-1"
     assert will.retain is False
+    assert isinstance(will.payload, bytes)
     assert json.loads(will.payload)["status"] == "offline"
 
 
