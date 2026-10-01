@@ -395,7 +395,8 @@ def main(argv=None):
               "--document", "file://%s" % document_path,
               "--description", "edge-agent %s" % args.version,
               "--target-selection", "SNAPSHOT"] + target + [
-        "--rollout-config", json.dumps({"maximumPerMinute": args.rollout_per_minute}),
+        "--job-executions-rollout-config",
+        json.dumps({"maximumPerMinute": args.rollout_per_minute}),
         "--abort-config", json.dumps(abort_config(args.abort_failure_pct)),
     ]
     run(create, args.dry_run)
