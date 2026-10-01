@@ -10,6 +10,11 @@ Secure Edge Fleet Device Agent
 
 Configuration is read from the environment (see CONFIG block). Nothing here
 should require editing this file per deployment.
+
+main() returns an exit code and never raises SystemExit itself, so it can be
+driven directly by tests and embedded by other callers. Startup failures are
+reported as a logged cause plus an exit code; see ensure_endpoint() and
+ensure_root_ca() for the two checks whose message is the point.
 """
 
 import json
@@ -103,6 +108,11 @@ AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 STATE_DIR_DEFAULT = "/var/lib/edge-agent"
 
 THING_NAME = None
+
+# Exit codes. main() returns one of these; only __main__ turns it into a process
+# exit. Naming them makes the values assertable in tests.
+EXIT_OK = 0
+EXIT_FAILURE = 1
 
 
 # -------------------------------------------------
@@ -315,6 +325,14 @@ def load_or_create_serial() -> str:
     return serial
 
 
+class StartupError(RuntimeError):
+    """A configuration problem that must stop the agent before it connects.
+
+    Carries the operator-facing message. main() logs it and returns
+    EXIT_FAILURE; it does not raise SystemExit, so callers keep control.
+    """
+
+
 def ensure_root_ca() -> None:
     """Vendored, not downloaded.
 
@@ -324,7 +342,7 @@ def ensure_root_ca() -> None:
     certs/ existed, so main() died on its first statement.
     """
     if not ROOT_CA.exists():
-        raise SystemExit(
+        raise StartupError(
             "Missing %s.\n"
             "Ship AmazonRootCA1.pem with the agent image rather than downloading the\n"
             "trust anchor at boot, e.g. during your image build:\n"
@@ -350,7 +368,7 @@ def ensure_endpoint() -> None:
     """
     endpoint = (os.environ.get("IOT_ENDPOINT", "") or IOT_ENDPOINT or "").strip()
     if not endpoint or endpoint == _DEFAULT_ENDPOINT:
-        raise SystemExit(
+        raise StartupError(
             "IOT_ENDPOINT is not set.\n"
             "The IoT data endpoint is account-specific, so it is never defaulted.\n"
             "Set it in the unit environment, e.g.:\n"
@@ -547,14 +565,27 @@ class FleetProvisioner:
 # -------------------------------------------------
 # Main
 # -------------------------------------------------
-def main():
+def main() -> int:
+    """Run the agent. Returns an exit code; never raises SystemExit.
+
+    Callers that want a process exit do `sys.exit(main())`, which is what
+    __main__ does below. Returning a code rather than raising keeps the function
+    testable without pytest.raises and embeddable by other callers.
+    """
     global THING_NAME
 
     _setup_logging()
     log.info("Secure Edge Fleet agent starting (endpoint=%s)", IOT_ENDPOINT)
 
-    ensure_endpoint()
-    ensure_root_ca()
+    # Both checks report a configuration problem whose message is the useful
+    # part, so they raise StartupError and main() turns it into a logged cause
+    # plus EXIT_FAILURE rather than an exception escaping the function.
+    try:
+        ensure_endpoint()
+        ensure_root_ca()
+    except StartupError as e:
+        log.error("%s", e)
+        return EXIT_FAILURE
 
     state_dir = resolve_state_dir()
     guard = BootGuard(state_dir)
@@ -590,7 +621,7 @@ def main():
                 claim_connection.disconnect().result()
             except Exception as e:
                 log.debug("claim disconnect failed: %s", e)
-            sys.exit(1)
+            return EXIT_FAILURE
 
         THING_NAME = provisioner.thing_name
         log.info("provisioning complete: thing=%s", THING_NAME)
@@ -817,7 +848,7 @@ def main():
                     job_id=job_id,
                 )
                 time.sleep(2)  # give the publish a chance to flush
-            sys.exit(1)
+            return EXIT_FAILURE
 
     # -------------------------------------------------
     # Signals
@@ -887,12 +918,12 @@ def main():
 
     if restart_requested.is_set():
         # systemd Restart=always brings us straight back up on the new build.
-        # Only the restart path exits explicitly: a clean return from main()
-        # must not raise SystemExit, or every caller (and every test) sees a
-        # normal shutdown as an exception.
-        log.info("exiting to let systemd start the new build")
-        sys.exit(0)
+        # main() still returns normally: the exit code is the caller's job, and
+        # returning 0 here means systemd restarts on a clean stop.
+        log.info("exiting so systemd starts the new build")
+
+    return EXIT_OK
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
