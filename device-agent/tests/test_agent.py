@@ -48,10 +48,11 @@ THING = "thing-1"
 def _clean_env(monkeypatch):
     for var in ("NOTIFY_SOCKET", "WATCHDOG_USEC", "OTA_STATE_DIR"):
         monkeypatch.delenv(var, raising=False)
-    # agent.py reads IOT_ENDPOINT at import time, so setenv() after import has no
-    # effect on the module attribute the code actually reads. Patch the attribute
-    # instead - the same way ROLE_ALIAS and STATE_DIR_DEFAULT are handled below.
+    # ensure_endpoint() reads the environment first and falls back to the module
+    # attribute, so both of these have to be set for a test to see a real
+    # endpoint. Tests that want the refusal path override both.
     monkeypatch.setattr(agent, "IOT_ENDPOINT", "example-ats.iot.us-east-1.amazonaws.com")
+    monkeypatch.setenv("IOT_ENDPOINT", "example-ats.iot.us-east-1.amazonaws.com")
 
 
 @pytest.fixture
@@ -144,23 +145,48 @@ def test_watchdog_inactive_without_interval_or_socket(monkeypatch):
 # ------------------------------------------------------------------ endpoint
 # The endpoint has no sensible default: it is account-specific. ensure_endpoint()
 # is what stops a device from silently dialling someone else's hostname.
+#
+# Every test here clears BOTH the environment variable and the module attribute,
+# because ensure_endpoint() consults the environment first and the attribute
+# second. The autouse fixture sets both, so a test that omits this would be
+# asserting against a valid endpoint it never removed.
 class TestEnsureEndpoint:
-    def test_placeholder_is_refused(self):
+    def _clear(self, monkeypatch):
+        monkeypatch.delenv("IOT_ENDPOINT", raising=False)
+        monkeypatch.setattr(agent, "IOT_ENDPOINT", agent._DEFAULT_ENDPOINT)
+
+    def test_placeholder_is_refused(self, monkeypatch):
+        self._clear(monkeypatch)
         with pytest.raises(SystemExit) as exc:
             agent.ensure_endpoint()
         assert "IOT_ENDPOINT" in str(exc.value)
 
     def test_empty_is_refused(self, monkeypatch):
+        monkeypatch.delenv("IOT_ENDPOINT", raising=False)
         monkeypatch.setattr(agent, "IOT_ENDPOINT", "")
+        with pytest.raises(SystemExit):
+            agent.ensure_endpoint()
+
+    def test_the_reserved_tld_default_is_refused(self, monkeypatch):
+        # Even with no env var, the compiled-in default must not be accepted.
+        monkeypatch.delenv("IOT_ENDPOINT", raising=False)
+        monkeypatch.setattr(agent, "IOT_ENDPOINT", agent._DEFAULT_ENDPOINT)
         with pytest.raises(SystemExit):
             agent.ensure_endpoint()
 
     def test_a_real_endpoint_is_accepted(self):
         agent.ensure_endpoint()  # the autouse fixture supplies a real one
 
+    def test_whitespace_only_is_refused(self, monkeypatch):
+        monkeypatch.setenv("IOT_ENDPOINT", "   ")
+        monkeypatch.setattr(agent, "IOT_ENDPOINT", "   ")
+        with pytest.raises(SystemExit):
+            agent.ensure_endpoint()
+
     def test_the_module_default_is_the_reserved_tld(self):
         # Guards against someone reintroducing an account-specific default.
         assert agent._DEFAULT_ENDPOINT.endswith(".invalid")
+        assert "amazonaws.com" not in agent._DEFAULT_ENDPOINT
 
 
 # ------------------------------------------------------------------ boot guard
