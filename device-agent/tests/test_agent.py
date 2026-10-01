@@ -192,17 +192,27 @@ class TestEnsureEndpoint:
 
 # ------------------------------------------------------------------ startup
 # main() returns an exit code rather than raising, so a startup failure is a
-# return value here. These two tests pin that contract.
-def test_main_returns_failure_without_an_endpoint(env, monkeypatch):
+# return value. These drive main() directly, WITHOUT the env fixture: that
+# fixture stubs the startup checks away, and these are the tests for them.
+def test_main_returns_failure_when_the_endpoint_is_unset(certs, monkeypatch):
     monkeypatch.delenv("IOT_ENDPOINT", raising=False)
     monkeypatch.setattr(agent, "IOT_ENDPOINT", agent._DEFAULT_ENDPOINT)
+    monkeypatch.setattr(agent, "_setup_logging", lambda: None)
     assert agent.main() == agent.EXIT_FAILURE
 
 
-def test_main_returns_failure_without_a_root_ca(env, monkeypatch):
-    # The env fixture stubs ensure_root_ca away, so patch it back to the real one.
-    monkeypatch.setattr(agent, "ensure_root_ca", type(agent).__dict__ if False else ensure_root_ca_real)
+def test_main_returns_failure_when_the_root_ca_is_missing(certs, monkeypatch):
+    monkeypatch.setattr(agent, "_setup_logging", lambda: None)
+    # certs/ does not exist yet, so ROOT_CA is absent and ensure_root_ca raises.
     assert agent.main() == agent.EXIT_FAILURE
+
+
+def test_main_never_raises_system_exit(certs, monkeypatch):
+    """The contract this refactor exists to establish."""
+    monkeypatch.delenv("IOT_ENDPOINT", raising=False)
+    monkeypatch.setattr(agent, "IOT_ENDPOINT", agent._DEFAULT_ENDPOINT)
+    monkeypatch.setattr(agent, "_setup_logging", lambda: None)
+    assert isinstance(agent.main(), int)
 
 
 # ------------------------------------------------------------------ boot guard
