@@ -22,7 +22,15 @@ MAX_UNCONFIRMED_BOOTS=3
 [ -f "$PENDING" ] || exit 0        # nothing pending, nothing to do
 
 mkdir -p "$STATE_DIR"
+
+# A corrupt or truncated boot_count must not abort this script. Under `set -e`
+# the arithmetic below is a fatal expansion error with a non-numeric value, and
+# this script is the only thing that can roll a device back off a release that
+# will not start. Failing here means failing open, on the broken build.
 count=$(cat "$BOOT_COUNT" 2>/dev/null || echo 0)
+case "$count" in
+    ''|*[!0-9]*) count=0 ;;
+esac
 count=$((count + 1))
 echo "$count" > "$BOOT_COUNT"
 
