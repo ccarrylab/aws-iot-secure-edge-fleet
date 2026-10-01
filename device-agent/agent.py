@@ -65,12 +65,14 @@ log = logging.getLogger("agent")
 # -------------------------------------------------
 # Configuration
 # -------------------------------------------------
-# The committed endpoint is account-specific. Read it from the environment and
-# let `terraform output` feed it; editing this file per deployment does not scale
-# and puts account identifiers in git history.
-IOT_ENDPOINT = os.environ.get(
-    "IOT_ENDPOINT", "a3m4rx2lnx5xlz-ats.iot.us-east-1.amazonaws.com"
-)
+# The endpoint is account-specific, so it is NEVER defaulted. A compiled-in
+# hostname belongs to one account: a device that boots without IOT_ENDPOINT set
+# would silently try to reach someone else's endpoint and fail with a DNS or TLS
+# error that says nothing about the real cause. An unresolvable placeholder plus
+# a start-up check fails immediately and names the problem instead.
+_DEFAULT_ENDPOINT = "iot-endpoint-not-configured.invalid"  # RFC 2606 reserved TLD
+IOT_ENDPOINT = os.environ.get("IOT_ENDPOINT", _DEFAULT_ENDPOINT).strip()
+
 TEMPLATE_NAME = os.environ.get(
     "PROVISIONING_TEMPLATE", "secure-edge-fleet-prov-template"
 )
@@ -333,6 +335,27 @@ def ensure_root_ca() -> None:
         )
 
 
+def ensure_endpoint() -> None:
+    """Refuse to start without a real IOT_ENDPOINT.
+
+    The endpoint is account-specific and has no sensible default. Booting with
+    the placeholder means the agent tries to resolve a reserved-TLD hostname,
+    which fails instantly and points straight at the missing configuration -
+    unlike a compiled-in endpoint belonging to some other account, where the
+    device would connect, authenticate, and fail in a way that says nothing
+    about the cause.
+    """
+    if not IOT_ENDPOINT or IOT_ENDPOINT == _DEFAULT_ENDPOINT:
+        raise SystemExit(
+            "IOT_ENDPOINT is not set.\n"
+            "The IoT data endpoint is account-specific, so it is never defaulted.\n"
+            "Set it in the unit environment, e.g.:\n"
+            "  export IOT_ENDPOINT=$(aws iot describe-endpoint \\\n"
+            "      --endpoint-type iot:Data-ATS --query endpointAddress --output text)\n"
+            "or feed it from `terraform output` during image build."
+        )
+
+
 def _write_secret(path: Path, data: str) -> None:
     """Create the file already at 0600.
 
@@ -430,8 +453,7 @@ class FleetProvisioner:
 
         time.sleep(1) was a guess that the subscription had landed. On a slow
         first TLS handshake the create-request went out before the
-        accepted-topic subscription existed, the response went nowhere, and
-        ninety seconds later you got "Provisioning timed out" with no cause.
+        accepted-topic subscription existed, and the response went nowhere.
         """
         future, _ = self.mqtt.subscribe(
             topic=topic,
@@ -455,8 +477,6 @@ class FleetProvisioner:
             qos=mqtt.QoS.AT_LEAST_ONCE,
         )
 
-    # Every callback is guarded. Unguarded, a KeyError inside one is swallowed
-    # by the MQTT thread and the operator only ever sees the generic timeout.
     def _on_create_accepted(self, topic, payload, dup, qos, retain, **kwargs):
         try:
             data = json.loads(payload)
@@ -529,12 +549,7 @@ def main():
     _setup_logging()
     log.info("Secure Edge Fleet agent starting (endpoint=%s)", IOT_ENDPOINT)
 
-    if not os.environ.get("IOT_ENDPOINT"):
-        log.warning(
-            "IOT_ENDPOINT is not set; using the value compiled into this file. "
-            "Set IOT_ENDPOINT in the unit environment instead of editing source."
-        )
-
+    ensure_endpoint()
     ensure_root_ca()
 
     state_dir = resolve_state_dir()
@@ -850,18 +865,26 @@ def main():
             # the process, taking the Jobs subscriptions with it.
             failures += 1
             log.warning("telemetry publish failed (%d in a row): %s", failures, e)
-            stop.wait(min(30 * failures, 300))
-            continue
+            if failures >= 5:
+                log.error("too many consecutive telemetry failures - exiting for a clean restart")
+                break
 
         stop.wait(30)
 
+    # -------------------------------------------------
+    # Shutdown
+    # -------------------------------------------------
     watchdog.stop()
-    sd_notify("STATUS=stopping")
+    log.info("disconnecting")
     try:
         mqtt_connection.disconnect().result()
     except Exception as e:
         log.warning("disconnect failed: %s", e)
-    log.info("stopped")
+
+    if restart_requested.is_set():
+        # systemd Restart=always brings us straight back up on the new build.
+        log.info("exiting to let systemd start the new build")
+    sys.exit(0)
 
 
 if __name__ == "__main__":
