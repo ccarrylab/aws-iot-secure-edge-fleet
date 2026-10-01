@@ -48,6 +48,10 @@ THING = "thing-1"
 def _clean_env(monkeypatch):
     for var in ("NOTIFY_SOCKET", "WATCHDOG_USEC", "OTA_STATE_DIR"):
         monkeypatch.delenv(var, raising=False)
+    # agent.py reads IOT_ENDPOINT at import time, so setenv() after import has no
+    # effect on the module attribute the code actually reads. Patch the attribute
+    # instead - the same way ROLE_ALIAS and STATE_DIR_DEFAULT are handled below.
+    monkeypatch.setattr(agent, "IOT_ENDPOINT", "example-ats.iot.us-east-1.amazonaws.com")
 
 
 @pytest.fixture
@@ -135,6 +139,28 @@ def test_watchdog_inactive_without_interval_or_socket(monkeypatch):
     wd = agent.Watchdog(5.0)
     wd.start()
     assert wd._thread is None and sent == []
+
+
+# ------------------------------------------------------------------ endpoint
+# The endpoint has no sensible default: it is account-specific. ensure_endpoint()
+# is what stops a device from silently dialling someone else's hostname.
+class TestEnsureEndpoint:
+    def test_placeholder_is_refused(self):
+        with pytest.raises(SystemExit) as exc:
+            agent.ensure_endpoint()
+        assert "IOT_ENDPOINT" in str(exc.value)
+
+    def test_empty_is_refused(self, monkeypatch):
+        monkeypatch.setattr(agent, "IOT_ENDPOINT", "")
+        with pytest.raises(SystemExit):
+            agent.ensure_endpoint()
+
+    def test_a_real_endpoint_is_accepted(self):
+        agent.ensure_endpoint()  # the autouse fixture supplies a real one
+
+    def test_the_module_default_is_the_reserved_tld(self):
+        # Guards against someone reintroducing an account-specific default.
+        assert agent._DEFAULT_ENDPOINT.endswith(".invalid")
 
 
 # ------------------------------------------------------------------ boot guard
@@ -465,7 +491,6 @@ def env(monkeypatch, tmp_path, certs):
     conn = FakeConnection(lambda: handlers[signal.SIGTERM](signal.SIGTERM, None))
     state = tmp_path / "state"
     monkeypatch.setenv("OTA_STATE_DIR", str(state))
-    monkeypatch.setenv("IOT_ENDPOINT", "example-ats.iot.us-east-1.amazonaws.com")
     monkeypatch.setattr(agent, "_setup_logging", lambda: None)
     monkeypatch.setattr(agent, "ensure_root_ca", lambda: None)
     monkeypatch.setattr(agent, "load_existing_thing", lambda: THING)
