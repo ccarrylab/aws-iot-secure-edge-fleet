@@ -244,9 +244,14 @@ resource "aws_s3_bucket_lifecycle_configuration" "ota_packages" {
   }
 }
 
-# A publisher role with write access only to the releases prefix. Nothing in
-# the repo currently says who may publish a release, which in practice means
-# "whoever runs the script with their own credentials".
+# A publisher role with write access only to the prefix releases actually land
+# in. Nothing in the repo previously said who may publish a release, which in
+# practice meant "whoever runs the script with their own credentials".
+#
+# NOTE: the prefix here MUST match publish_release.py's default --key-prefix
+# ("packages/"). It previously granted write access to "releases/*" while the
+# script uploaded to "packages/*", so a CI role using this policy would have
+# been denied on every upload the first time it was exercised.
 resource "aws_iam_policy" "ota_publisher" {
   name        = "${var.project_name}-ota-publisher"
   description = "Write OTA releases only. Attach to the CI role, never to a human."
@@ -258,7 +263,7 @@ resource "aws_iam_policy" "ota_publisher" {
         Sid      = "PublishReleases"
         Effect   = "Allow"
         Action   = ["s3:PutObject", "s3:AbortMultipartUpload"]
-        Resource = ["${aws_s3_bucket.ota_packages.arn}/releases/*"]
+        Resource = ["${aws_s3_bucket.ota_packages.arn}/packages/*"]
       },
       {
         Sid      = "PublishSignatures"

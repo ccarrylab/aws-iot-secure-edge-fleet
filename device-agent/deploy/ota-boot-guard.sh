@@ -32,7 +32,11 @@ if [ "$count" -ge "$MAX_UNCONFIRMED_BOOTS" ]; then
         >> "$STATE_DIR/rollback.log" 2>/dev/null || true
 
     if [ -d "$STATE_DIR/packages/$previous" ]; then
-        ln -sfn "$STATE_DIR/packages/$previous" "$STATE_DIR/packages/current"
+        # Atomic symlink swap: a partially written link is worse than none,
+        # because the device then starts nothing at all.
+        tmp_link="$STATE_DIR/packages/.current.rollback.$$"
+        ln -s "$STATE_DIR/packages/$previous" "$tmp_link"
+        mv -Tf "$tmp_link" "$STATE_DIR/packages/current"
         echo "ota-boot-guard: $(date -u +%FT%TZ) rolled back to $previous" \
             >> "$STATE_DIR/rollback.log" 2>/dev/null || true
     else
@@ -40,7 +44,10 @@ if [ "$count" -ge "$MAX_UNCONFIRMED_BOOTS" ]; then
             >> "$STATE_DIR/rollback.log" 2>/dev/null || true
     fi
 
-    rm -f "$PENDING" "$BOOT_COUNT"
+    # pending.json belongs to the activation we just undid; leaving it behind
+    # would make the agent believe a confirmation is still owed for a version
+    # that is no longer current.
+    rm -f "$PENDING" "$BOOT_COUNT" "$STATE_DIR/pending.json"
 fi
 
 exit 0

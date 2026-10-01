@@ -205,7 +205,6 @@ def abort_config(fail_pct, min_things=1):
 # ---------------------------------------------------------------------------
 # 6. create
 # ---------------------------------------------------------------------------
-
 def resolve_thing_group_arn(name, dry_run=False):
     if dry_run:
         return "arn:aws:iot:REGION:ACCOUNT:thinggroup/%s" % name
@@ -270,7 +269,6 @@ def verify_uploaded(url, expected_sha):
 
 
 # ---------------------------------------------------------------------------
-
 def parse_args(argv):
     p = argparse.ArgumentParser(
         description="Build, hash, upload and deploy an edge-agent release.")
@@ -371,61 +369,40 @@ def main(argv=None):
     if rollback:
         info("  rollbackVersion: %s" % rollback)
     else:
-        info("  rollbackVersion: none - no completed job found; devices keep their own previous")
+        info("  rollbackVersion: none - no completed job to fall back to")
 
-    s3_uri = "s3://%s/packages/%s.tar.gz" % (args.bucket, args.version)
     document = build_document(args.version, url, checksum, rollback, s3_uri=s3_uri)
-    doc_path = os.path.join(tmpdir, "job-document.json")
-    with open(doc_path, "w") as fh:
-        json.dump(document, fh, indent=2, sort_keys=True)
-    info("  document written to %s" % doc_path)
-    for k in ("version", "checksum", "rollbackVersion"):
-        if k in document:
-            info("    %-16s %s" % (k, document[k]))
+    info(json.dumps(document, indent=2))
+
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+        json.dump(document, fh)
+        document_path = fh.name
 
     info("")
     info("[5/6] verifying the uploaded artifact")
     if args.dry_run:
-        info("  skipped in dry run")
+        info("  (skipped in dry run)")
     else:
         verify_uploaded(url, checksum)
 
     info("")
-    info("[6/6] creating the IoT job")
-    abort = abort_config(args.abort_failure_pct)
-    info("  abort config: CANCEL at %d%% failures (min %d device)"
-         % (args.abort_failure_pct,
-            abort["criteriaList"][0]["minNumberOfExecutedThings"]))
-    info("  rollout: %d device(s)/minute" % args.rollout_per_minute)
-
-    if args.thing_arn:
-        targets = [args.thing_arn]
-    elif args.thing_group:
-        targets = [resolve_thing_group_arn(args.thing_group, args.dry_run)]
-    else:
-        die("no target: pass --thing-group or --thing-arn")
+    info("[6/6] creating the job")
+    target = (["--targets", args.thing_arn] if args.thing_arn
+              else ["--targets", resolve_thing_group_arn(args.thing_group or "%s-fleet" % "secure-edge-fleet", args.dry_run)])
 
     create = ["aws", "iot", "create-job",
               "--job-id", job_id,
-              "--targets"] + targets + [
-              "--document", "file://%s" % doc_path,
+              "--document", "file://%s" % document_path,
               "--description", "edge-agent %s" % args.version,
-              "--target-selection", "SNAPSHOT",
-              "--job-executions-rollout-config",
-              json.dumps({"maximumPerMinute": args.rollout_per_minute}),
-              "--abort-config", json.dumps(abort),
-              "--output", "json"]
+              "--target-selection", "SNAPSHOT"] + target + [
+        "--rollout-config", json.dumps({"maximumPerMinute": args.rollout_per_minute}),
+        "--abort-config", json.dumps(abort_config(args.abort_failure_pct)),
+    ]
     run(create, args.dry_run)
 
+    os.unlink(document_path)
     info("")
-    info("=== %s ===" % ("dry run complete" if args.dry_run else "published"))
-    info("  job id   %s" % job_id)
-    info("  version  %s" % args.version)
-    info("  sha256   %s" % checksum)
-    if not args.dry_run:
-        info("")
-        info("watch it:  aws iot list-job-executions-for-job --job-id %s" % job_id)
-        info("abort it:  aws iot cancel-job --job-id %s" % job_id)
+    info("published %s (job %s)" % (args.version, job_id))
     return 0
 
 
