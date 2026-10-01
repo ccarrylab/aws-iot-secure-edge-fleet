@@ -64,6 +64,36 @@ jobs:
           path: device-agent/.coverage
           include-hidden-files: true
 
+  shell:
+    name: Shell contract tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # The boot guard is the one component whose failure is unrecoverable in
+      # the field, and it is shell. Cover it directly rather than relying on
+      # the Python class that writes the files it reads.
+      - name: ota-boot-guard.sh contract tests
+        run: sh device-agent/tests/t_ota_boot_guard.sh
+
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck device-agent/deploy/ota-boot-guard.sh device-agent/tests/t_ota_boot_guard.sh
+
+  release-tooling:
+    name: Release tooling
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Nothing previously executed publish_release.py, which is how a wrong
+      # AWS CLI flag reached main with every other check green. A --dry-run
+      # publish touches no AWS resource and exercises the real code path.
+      - name: publish_release.py --dry-run checks
+        run: bash tools/check_publish_release.sh
+
   security:
     name: Security scans
     runs-on: ubuntu-latest
