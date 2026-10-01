@@ -535,7 +535,11 @@ def test_activation_defers_succeeded_and_arms_boot_guard(env, monkeypatch):
     monkeypatch.setattr(agent, "OTAHandler", make_fake_ota(on_handle=activate))
     env.conn.job = {"version": "1.2.0"}
 
-    agent.main()
+    # This is the restart path. The telemetry loop breaks with restart_requested
+    # set, and main() exits explicitly so systemd Restart=always brings the new
+    # build up. That explicit exit is part of the behaviour under test.
+    with pytest.raises(SystemExit):
+        agent.main()
 
     statuses = [b["status"] for b in job_updates(env.conn, "job-1")]
     assert "SUCCEEDED" not in statuses  # not until the new build has booted
