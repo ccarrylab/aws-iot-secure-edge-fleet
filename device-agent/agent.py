@@ -344,8 +344,12 @@ def ensure_endpoint() -> None:
     unlike a compiled-in endpoint belonging to some other account, where the
     device would connect, authenticate, and fail in a way that says nothing
     about the cause.
+
+    Reads the environment at call time and falls back to the module attribute,
+    so both `monkeypatch.setenv` and `monkeypatch.setattr` in tests take effect.
     """
-    if not IOT_ENDPOINT or IOT_ENDPOINT == _DEFAULT_ENDPOINT:
+    endpoint = (os.environ.get("IOT_ENDPOINT", "") or IOT_ENDPOINT or "").strip()
+    if not endpoint or endpoint == _DEFAULT_ENDPOINT:
         raise SystemExit(
             "IOT_ENDPOINT is not set.\n"
             "The IoT data endpoint is account-specific, so it is never defaulted.\n"
@@ -883,8 +887,11 @@ def main():
 
     if restart_requested.is_set():
         # systemd Restart=always brings us straight back up on the new build.
+        # Only the restart path exits explicitly: a clean return from main()
+        # must not raise SystemExit, or every caller (and every test) sees a
+        # normal shutdown as an exception.
         log.info("exiting to let systemd start the new build")
-    sys.exit(0)
+        sys.exit(0)
 
 
 if __name__ == "__main__":
