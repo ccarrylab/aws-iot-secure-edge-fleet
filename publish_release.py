@@ -44,7 +44,10 @@ import sys
 import tarfile
 import tempfile
 import urllib.request
+import base64
 from datetime import datetime, timezone
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
 
 # --- must match ota_handler.py ---------------------------------------------
 VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]{0,62}$")
@@ -162,6 +165,22 @@ def sha256_file(path):
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def sign_manifest(manifest_bytes, private_key_path):
+    """Sign the manifest bytes using a PEM private key."""
+    with open(private_key_path, "rb") as kf:
+        key = serialization.load_pem_private_key(kf.read(), password=None)
+    
+    signature = key.sign(
+        manifest_bytes,
+        padding.PSS(
+            mgf=padding.MGF1(hashes.SHA256()),
+            salt_length=padding.PSS.MAX_LENGTH
+        ),
+        hashes.SHA256()
+    )
+    return base64.b64encode(signature).decode('utf-8')
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +307,8 @@ def parse_args(argv):
                    help="KMS key id for SSE-KMS")
     p.add_argument("--rollback-version", default="",
                    help="version devices fall back to; auto-detected if omitted")
+    p.add_argument("--signing-key", default="",
+                   help="Path to PEM private key for manifest signing")
     p.add_argument("--url-ttl-hours", type=int, default=168,
                    help="presigned URL lifetime in hours (max 168)")
     p.add_argument("--rollout-per-minute", type=int, default=10,
@@ -374,6 +395,15 @@ def main(argv=None):
         info("  rollbackVersion: none - no completed job found; devices keep their own previous")
 
     document = build_document(args.version, url, checksum, rollback, s3_uri=s3_uri)
+
+    if args.signing_key:
+        info("")
+        info("[S+0] signing manifest")
+        manifest_text = "version:%s|sha256:%s" % (args.version, checksum)
+        sig = sign_manifest(manifest_text.encode(), args.signing_key)
+        document["manifestSig"] = sig
+        info("  signature: %s..." % sig[:20])
+
     doc_path = os.path.join(tmpdir, "job-document.json")
     with open(doc_path, "w") as fh:
         json.dump(document, fh, indent=2, sort_keys=True)

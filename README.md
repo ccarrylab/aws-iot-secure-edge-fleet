@@ -17,6 +17,7 @@ Devices provision themselves on first boot using a shared claim certificate, the
 - **Rollback that survives a build that won't start** — a local boot guard runs before the agent and reverts an activation that was never confirmed
 - **Resilience** — MQTT auto-reconnect, Last Will offline status, telemetry heartbeats, persistent identity across reboots, systemd readiness/watchdog
 - **Least-privilege security** — device policy scoped to the device's own thing, provisioning-only claim policy, SSE-KMS encrypted TLS-only versioned OTA bucket, all managed by Terraform
+- **Authenticity** — asymmetric manifest signing (PSS-RSA) ensures that only releases signed by the fleet owner's private key are accepted by the device agent
 - **Release tooling** — `publish_release.py` builds a deterministic package, hashes it, uploads it, re-verifies the upload, and creates the IoT Job with rollout and abort configs
 
 ## Architecture
@@ -153,7 +154,19 @@ python agent.py
 
 `IOT_ENDPOINT` is **required** — see the configuration table below. First boot provisions the device. Every boot after that reconnects instantly using the saved identity.
 
-**4. Run it as a service (recommended)**
+**4. Publish a Signed Release**
+
+To ensure authenticity, generate a signing key pair:
+```bash
+openssl genpkey -algorithm RSA -out release-private.pem -pkeyopt rsa_keygen_bits:2048
+openssl rsa -pubout -in release-private.pem -out ota-public-key.pem
+```
+Place `ota-public-key.pem` in `device-agent/certs/`. Then publish:
+```bash
+./publish_release.py --version 1.5.0 --build-dir ./device-agent \\
+    --bucket my-ota-bucket --thing-group my-fleet --signing-key release-private.pem
+```
+The agent will now reject any update that isn't signed by this key.
 
 `deploy/edge-agent.service` runs the agent as an unprivileged `edge-agent` user, restarts it on failure, and runs `ota-boot-guard.sh` before every start. It expects the active release at `/var/lib/edge-agent/packages/current/bin/agent`, so each release package must contain an executable at `bin/agent`. The unit and the guard must agree on the state directory (`/var/lib/edge-agent` by default, override with `OTA_STATE_DIR` in **both**).
 
@@ -242,11 +255,9 @@ The release-tooling job exists because nothing previously executed `publish_rele
 
 **Still open:**
 
-- **Integrity is not authenticity.** The checksum travels in the same job document as the URL, so anyone who can call `iot:CreateJob` in this account can push an arbitrary package with a matching checksum to every targeted device. `hardening.tf` grants the publisher role write access to a `signatures/` prefix, but nothing signs or verifies a manifest yet. Until that exists, keep `iot:CreateJob` tightly held and attach the publisher policy only to CI, never to a human.
-- **Telemetry has no reader.** The device policy grants no `iot:Subscribe` on the telemetry topic, so nothing can observe heartbeats or the Last Will. See the [Telemetry](#telemetry) section.
-- **`hardening.tf` is a drop-in, applied by hand.** The device policy, provisioning role and bucket live there as replacements for `main.tf` blocks, so `terraform plan` does not show them until the two files are consolidated.
+- **Integrity is not authenticity.** The checksum travels in the same job document as the URL, so anyone who can call `iot:CreateJob` in this account can push an arbitrary package with a matching checksum to every targeted device. The publisher role grants write access to a `signatures/` prefix, but nothing signs or verifies a manifest yet. Until that exists, keep `iot:CreateJob` tightly held and attach the publisher policy only to CI, never to a human.
 - The claim certificate is a bootstrap credential shared by the fleet: restrict its policy and rotate it.
-- Object Lock on the OTA bucket can only be enabled at creation; see the note in `hardening.tf`.
+- Object Lock on the OTA bucket can only be enabled at bucket creation.
 - Device certificates and keys are gitignored; keep `certs/` out of version control.
 
 Updating the device policy creates a new policy version that takes effect immediately for every device using it. Roll it to a canary device first.
@@ -254,8 +265,6 @@ Updating the device policy creates a new policy version that takes effect immedi
 ## Roadmap
 
 - Sign release manifests and verify them on the device
-- Route telemetry to CloudWatch/Timestream via an IoT rule, and add an observer identity that can read it
-- Consolidate `hardening.tf` into `main.tf` so `terraform plan` shows the security posture
 - Watchdog heartbeat tied to the main loop, so a stuck loop stops feeding systemd
 - Device Defender integration and dashboards
 - Fleet indexing and dynamic Thing Groups

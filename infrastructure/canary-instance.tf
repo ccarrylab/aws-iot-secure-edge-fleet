@@ -14,13 +14,12 @@
 #
 # enable_canary defaults to false. Nothing here is created until you ask:
 #
-#   terraform apply -var="enable_canary=true" \
-#       -var="canary_key_name=edge-canary" \
-#       -var="canary_ssh_cidr=$(curl -s https://checkip.amazonaws.com)/32"
+#   terraform apply -var="enable_canary=true" -var="canary_key_name=edge-canary"
 #
-# and when you are done:
+# canary_ssh_cidr defaults to the operator's own address; update it there when
+# your ISP hands you a new one. And when you are done:
 #
-#   terraform destroy -var="enable_canary=true" -var="canary_ssh_cidr=..."
+#   terraform destroy -var="enable_canary=true"
 #
 # Cost: a t3.micro is free-tier eligible for 12 months on a new account and
 # pennies per hour otherwise. The Elastic IP is the only charge that persists,
@@ -40,14 +39,16 @@ variable "canary_ssh_cidr" {
   description = <<-EOT
     CIDR allowed to SSH to the canary instance. Nothing else can reach it — the
     agent only makes outbound connections to IoT Core, so there is no reason to
-    open 8883 or anything else inbound. Set this to your own address:
-      -var="canary_ssh_cidr=$(curl -s https://checkip.amazonaws.com)/32"
+    open 8883 or anything else inbound.
 
-    Defaults to a TEST-NET-3 documentation range so a forgotten -var fails
-    closed (nobody can reach it) rather than open. Replace it to use the rig.
+    Set this to your own public address. Residential addresses change when the
+    router reconnects, so if SSH stops working mid-test, update this and re-apply.
+
+    Defaults to a TEST-NET-3 documentation range so a forgotten value fails
+    closed (nobody can reach it) rather than open.
   EOT
   type        = string
-  default     = "203.0.113.1/32"
+  default     = "173.49.87.129/32"
 
   validation {
     condition     = can(cidrnetmask(var.canary_ssh_cidr))

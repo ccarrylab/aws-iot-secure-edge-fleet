@@ -1,0 +1,18 @@
+[project]
+name = "aws-iot-secure-edge-fleet"
+version = "0.1.0"
+description = "Zero-touch device provisioning and safe OTA updates for AWS IoT"
+dependencies = [
+    "awsiotsdk",
+    "boto3",
+    "cryptography>=42.0.0",
+]
+requires-python = ">=3.9"
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "S"]
+ignore = ["S105"] # Allow os.getcwd()

@@ -17,6 +17,9 @@ import subprocess  # nosec B404 - argv list, never a shell; command is device co
 import tarfile
 import time
 import urllib.request
+import base64
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -75,6 +78,28 @@ class OTAHandler:
         return version
 
     @staticmethod
+    def _verify_signature(manifest_text, signature_b64, pub_key_path):
+        """Verify the manifest signature using a PEM public key."""
+        try:
+            with open(pub_key_path, "rb") as kf:
+                key = serialization.load_pem_public_key(kf.read())
+            
+            signature = base64.b64decode(signature_b64)
+            key.verify(
+                signature,
+                manifest_text.encode(),
+                padding.PSS(
+                    mgf=padding.MGF1(hashes.SHA256()),
+                    salt_length=padding.PSS.MAX_LENGTH
+                ),
+                hashes.SHA256()
+            )
+            return True
+        except Exception as e:
+            print("[OTA] Signature verification failed: %s" % e)
+            return False
+
+    @staticmethod
     def _sha256(path: Path) -> str:
         h = hashlib.sha256()
         with open(path, "rb") as f:
@@ -130,6 +155,21 @@ class OTAHandler:
         if not SHA256_RE.match(checksum):
             self._fail("Job document must include a valid sha256 checksum")
             return False
+
+        # Manifest Verification (Authenticity)
+        sig = job_document.get("manifestSig")
+        if sig:
+            print("[OTA] Manifest signature found. Verifying authenticity...")
+            pub_key = Path("certs/ota-public-key.pem")
+            if not pub_key.exists():
+                self._fail("Manifest signature present but certs/ota-public-key.pem missing")
+                return False
+            
+            manifest_text = "version:%s|sha256:%s" % (version, checksum)
+            if not self._verify_signature(manifest_text, sig, pub_key):
+                self._fail("Manifest signature is INVALID. Refusing to install.")
+                return False
+            print("[OTA] Manifest signature verified. Artifact is authentic.")
 
         # 3. never fetch a package over plaintext. The s3 lane is SigV4 over
         #    TLS and carries no URL, so it is exempt from this specific check.
