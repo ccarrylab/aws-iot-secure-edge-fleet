@@ -144,7 +144,8 @@ def test_watchdog_inactive_without_interval_or_socket(monkeypatch):
 
 # ------------------------------------------------------------------ endpoint
 # The endpoint has no sensible default: it is account-specific. ensure_endpoint()
-# is what stops a device from silently dialling someone else's hostname.
+# is what stops a device from silently dialling someone else's hostname, and it
+# raises StartupError - main() is what turns that into an exit code.
 #
 # Every test here clears BOTH the environment variable and the module attribute,
 # because ensure_endpoint() consults the environment first and the attribute
@@ -157,21 +158,21 @@ class TestEnsureEndpoint:
 
     def test_placeholder_is_refused(self, monkeypatch):
         self._clear(monkeypatch)
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(agent.StartupError) as exc:
             agent.ensure_endpoint()
         assert "IOT_ENDPOINT" in str(exc.value)
 
     def test_empty_is_refused(self, monkeypatch):
         monkeypatch.delenv("IOT_ENDPOINT", raising=False)
         monkeypatch.setattr(agent, "IOT_ENDPOINT", "")
-        with pytest.raises(SystemExit):
+        with pytest.raises(agent.StartupError):
             agent.ensure_endpoint()
 
     def test_the_reserved_tld_default_is_refused(self, monkeypatch):
         # Even with no env var, the compiled-in default must not be accepted.
         monkeypatch.delenv("IOT_ENDPOINT", raising=False)
         monkeypatch.setattr(agent, "IOT_ENDPOINT", agent._DEFAULT_ENDPOINT)
-        with pytest.raises(SystemExit):
+        with pytest.raises(agent.StartupError):
             agent.ensure_endpoint()
 
     def test_a_real_endpoint_is_accepted(self):
@@ -180,13 +181,38 @@ class TestEnsureEndpoint:
     def test_whitespace_only_is_refused(self, monkeypatch):
         monkeypatch.setenv("IOT_ENDPOINT", "   ")
         monkeypatch.setattr(agent, "IOT_ENDPOINT", "   ")
-        with pytest.raises(SystemExit):
+        with pytest.raises(agent.StartupError):
             agent.ensure_endpoint()
 
     def test_the_module_default_is_the_reserved_tld(self):
         # Guards against someone reintroducing an account-specific default.
         assert agent._DEFAULT_ENDPOINT.endswith(".invalid")
         assert "amazonaws.com" not in agent._DEFAULT_ENDPOINT
+
+
+# ------------------------------------------------------------------ startup
+# main() returns an exit code rather than raising, so a startup failure is a
+# return value. These drive main() directly, WITHOUT the env fixture: that
+# fixture stubs the startup checks away, and these are the tests for them.
+def test_main_returns_failure_when_the_endpoint_is_unset(certs, monkeypatch):
+    monkeypatch.delenv("IOT_ENDPOINT", raising=False)
+    monkeypatch.setattr(agent, "IOT_ENDPOINT", agent._DEFAULT_ENDPOINT)
+    monkeypatch.setattr(agent, "_setup_logging", lambda: None)
+    assert agent.main() == agent.EXIT_FAILURE
+
+
+def test_main_returns_failure_when_the_root_ca_is_missing(certs, monkeypatch):
+    monkeypatch.setattr(agent, "_setup_logging", lambda: None)
+    # certs/ does not exist yet, so ROOT_CA is absent and ensure_root_ca raises.
+    assert agent.main() == agent.EXIT_FAILURE
+
+
+def test_main_never_raises_system_exit(certs, monkeypatch):
+    """The contract this refactor exists to establish."""
+    monkeypatch.delenv("IOT_ENDPOINT", raising=False)
+    monkeypatch.setattr(agent, "IOT_ENDPOINT", agent._DEFAULT_ENDPOINT)
+    monkeypatch.setattr(agent, "_setup_logging", lambda: None)
+    assert isinstance(agent.main(), int)
 
 
 # ------------------------------------------------------------------ boot guard
@@ -293,7 +319,7 @@ def test_partial_credentials_are_not_an_identity(certs):
 
 
 def test_ensure_root_ca(certs):
-    with pytest.raises(SystemExit) as exc:
+    with pytest.raises(agent.StartupError) as exc:
         agent.ensure_root_ca()
     assert "AmazonRootCA1.pem" in str(exc.value)
     certs.mkdir(parents=True)
@@ -535,11 +561,10 @@ def test_activation_defers_succeeded_and_arms_boot_guard(env, monkeypatch):
     monkeypatch.setattr(agent, "OTAHandler", make_fake_ota(on_handle=activate))
     env.conn.job = {"version": "1.2.0"}
 
-    # This is the restart path. The telemetry loop breaks with restart_requested
-    # set, and main() exits explicitly so systemd Restart=always brings the new
-    # build up. That explicit exit is part of the behaviour under test.
-    with pytest.raises(SystemExit):
-        agent.main()
+    # The restart path: the telemetry loop breaks with restart_requested set and
+    # main() returns normally, so systemd Restart=always brings the new build up
+    # on a clean exit.
+    assert agent.main() == agent.EXIT_OK
 
     statuses = [b["status"] for b in job_updates(env.conn, "job-1")]
     assert "SUCCEEDED" not in statuses  # not until the new build has booted
@@ -555,7 +580,7 @@ def test_success_without_previous_is_passed_through(env, monkeypatch):
     monkeypatch.setattr(agent, "OTAHandler", make_fake_ota(
         on_handle=lambda o, d, j: o.on_status("SUCCEEDED", {"version": "1.2.0"})))
     env.conn.job = {"version": "1.2.0"}
-    agent.main()
+    assert agent.main() == agent.EXIT_OK
     assert [b["status"] for b in job_updates(env.conn, "job-1")] == ["IN_PROGRESS", "SUCCEEDED"]
     assert not (env.state / "pending").exists()
 
@@ -564,7 +589,7 @@ def test_failed_ota_is_reported(env, monkeypatch):
     monkeypatch.setattr(agent, "OTAHandler", make_fake_ota(
         on_handle=lambda o, d, j: o.on_status("FAILED", {"error": "bad checksum"})))
     env.conn.job = {"version": "1.2.0"}
-    agent.main()
+    assert agent.main() == agent.EXIT_OK
     updates = job_updates(env.conn, "job-1")
     assert updates[-1] == {"status": "FAILED", "statusDetails": {"error": "bad checksum"}}
 
@@ -575,7 +600,7 @@ def test_handler_exception_becomes_failed_job(env, monkeypatch):
 
     monkeypatch.setattr(agent, "OTAHandler", make_fake_ota(on_handle=boom))
     env.conn.job = {"version": "1.2.0"}
-    agent.main()
+    assert agent.main() == agent.EXIT_OK
     last = job_updates(env.conn, "job-1")[-1]
     assert last["status"] == "FAILED" and "boom" in last["statusDetails"]["error"]
 
@@ -585,7 +610,7 @@ def test_redelivered_job_runs_once(env, monkeypatch):
     monkeypatch.setattr(agent, "OTAHandler", fake)
     env.conn.job = {"version": "1.2.0"}
     env.conn.deliveries = 2
-    agent.main()
+    assert agent.main() == agent.EXIT_OK
     assert len(fake.instances[0].handled) == 1
 
 
@@ -594,7 +619,7 @@ def test_terminal_and_empty_jobs_are_ignored(env, monkeypatch):
     monkeypatch.setattr(agent, "OTAHandler", fake)
     env.conn.job = {"version": "1.2.0"}
     env.conn.job_status = "SUCCEEDED"
-    agent.main()
+    assert agent.main() == agent.EXIT_OK
     assert fake.instances[0].handled == [] and job_updates(env.conn, "job-1") == []
 
 
@@ -602,14 +627,14 @@ def test_empty_job_document_is_ignored(env, monkeypatch):
     fake = make_fake_ota()
     monkeypatch.setattr(agent, "OTAHandler", fake)
     env.conn.job = {}
-    agent.main()
+    assert agent.main() == agent.EXIT_OK
     assert fake.instances[0].handled == []
 
 
 def test_startup_confirms_healthy_build_and_reports_succeeded(env, monkeypatch):
     agent.BootGuard(env.state).arm("1.1.0", "job-9", "1.2.0")
     monkeypatch.setattr(agent, "OTAHandler", make_fake_ota(healthy=True))
-    agent.main()
+    assert agent.main() == agent.EXIT_OK
     assert not (env.state / "pending").exists()
     assert job_updates(env.conn, "job-9") == [
         {"status": "SUCCEEDED", "statusDetails": {"version": "1.2.0", "step": "confirmed"}}
@@ -619,9 +644,7 @@ def test_startup_confirms_healthy_build_and_reports_succeeded(env, monkeypatch):
 def test_startup_unhealthy_build_reports_failed_and_leaves_guard_armed(env, monkeypatch):
     agent.BootGuard(env.state).arm("1.1.0", "job-9", "1.2.0")
     monkeypatch.setattr(agent, "OTAHandler", make_fake_ota(healthy=False))
-    with pytest.raises(SystemExit) as exc:
-        agent.main()
-    assert exc.value.code == 1
+    assert agent.main() == agent.EXIT_FAILURE
     assert job_updates(env.conn, "job-9")[-1]["status"] == "FAILED"
     assert (env.state / "pending").exists()  # the shell guard needs this to roll back
 
@@ -635,7 +658,7 @@ def test_role_alias_wires_credential_provider_fetcher(env, monkeypatch):
     monkeypatch.setattr(agent, "ROLE_ALIAS", "my-alias")
     fake = make_fake_ota()
     monkeypatch.setattr(agent, "OTAHandler", fake)
-    agent.main()
+    assert agent.main() == agent.EXIT_OK
     assert calls["role_alias"] == "my-alias"
     assert calls["thing_name"] == THING
     assert calls["max_bytes"] == agent.MAX_DOWNLOAD_BYTES
@@ -652,21 +675,21 @@ def test_fetcher_build_failure_falls_back_to_presigned_urls(env, monkeypatch):
     monkeypatch.setattr(agent, "ROLE_ALIAS", "my-alias")
     fake = make_fake_ota()
     monkeypatch.setattr(agent, "OTAHandler", fake)
-    agent.main()
+    assert agent.main() == agent.EXIT_OK
     assert fake.instances[0].fetcher is None
 
 
 def test_no_role_alias_means_no_fetcher(env, monkeypatch):
     fake = make_fake_ota()
     monkeypatch.setattr(agent, "OTAHandler", fake)
-    agent.main()
+    assert agent.main() == agent.EXIT_OK
     assert fake.instances[0].fetcher is None
 
 
 # ------------------------------------------------------------------ main(): resilience + provisioning
 def test_telemetry_failure_does_not_kill_the_agent(env):
     env.conn.telemetry_error = RuntimeError("net down")
-    agent.main()  # must return normally
+    assert agent.main() == agent.EXIT_OK  # must return normally, not raise
     assert env.conn.disconnected
 
 
@@ -692,17 +715,15 @@ def test_first_boot_provisions_then_reconnects_as_thing(env, monkeypatch):
     monkeypatch.setattr(agent, "FleetProvisioner", _fake_provisioner(True))
     monkeypatch.setattr(agent, "build_connection",
                         lambda client_id, *a, **k: ids.append(client_id) or env.conn)
-    agent.main()
+    assert agent.main() == agent.EXIT_OK
     assert ids == ["claim-abc", THING]
 
 
-def test_provisioning_failure_exits_nonzero(env, monkeypatch):
+def test_provisioning_failure_returns_failure(env, monkeypatch):
     monkeypatch.setattr(agent, "load_existing_thing", lambda: None)
     monkeypatch.setattr(agent, "load_or_create_serial", lambda: "abc")
     monkeypatch.setattr(agent, "FleetProvisioner", _fake_provisioner(False))
-    with pytest.raises(SystemExit) as exc:
-        agent.main()
-    assert exc.value.code == 1
+    assert agent.main() == agent.EXIT_FAILURE
     assert env.conn.disconnected
 
 
@@ -715,6 +736,6 @@ def test_job_redelivered_mid_confirmation_is_not_rerun(env, monkeypatch):
     env.conn.job = {"version": "1.2.0"}
     env.conn.job_status = "IN_PROGRESS"
     env.conn.redeliver_on_get = True
-    agent.main()
+    assert agent.main() == agent.EXIT_OK
     assert fake.instances[0].handled == []
     assert [b["status"] for b in job_updates(env.conn, "job-1")] == ["SUCCEEDED"]

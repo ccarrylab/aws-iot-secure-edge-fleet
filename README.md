@@ -94,14 +94,16 @@ aws-iot-secure-edge-fleet/
 │   ├── agent.py             # Provisioning, Jobs listener, boot guard, telemetry loop
 │   ├── ota_handler.py       # Download/verify/extract/activate/rollback
 │   ├── s3_fetch.py          # Credential-provider S3 download (no URL expiry)
-│   ├── requirements.txt     # awsiotsdk, boto3, requests
+│   ├── requirements.txt     # awsiotsdk, boto3 (both pinned)
 │   ├── certs/               # AmazonRootCA1.pem is vendored; device/claim keys are gitignored
 │   ├── deploy/
 │   │   ├── edge-agent.service   # systemd unit (unprivileged user, watchdog, boot guard)
 │   │   └── ota-boot-guard.sh    # local rollback for a release that cannot start
-│   └── tests/               # pytest suite for ota_handler.py and s3_fetch.py
+│   └── tests/               # pytest suites + shell contract tests for the boot guard
+├── tools/
+│   └── check_publish_release.sh # exercises publish_release.py offline (--dry-run)
 ├── publish_release.py       # package -> hash -> upload -> verify -> create job
-├── .github/workflows/ci.yml # terraform fmt/validate + pytest on Python 3.9/3.11/3.12
+├── .github/workflows/ci.yml # see "Continuous integration" below
 └── LICENSE                  # MIT
 ```
 
@@ -129,31 +131,40 @@ terraform output   # note the provisioning template and claim policy names
 aws iot create-keys-and-certificate \
   --set-as-active \
   --certificate-pem-outfile claim-certificate.pem \
-  --private-key-outfile claim-private.key
+  --private-key-outfile claim-private.key \
+  --query certificateArn --output text
 
 aws iot attach-policy \
   --policy-name <claim_policy_name> \
   --target <claimCertificateArn>
 ```
 
-Place `claim-certificate.pem`, `claim-private.key`, and `AmazonRootCA1.pem` in `device-agent/certs/`.
+`--query certificateArn` keeps the private key out of your terminal scrollback: without it the CLI prints the key material too. Place `claim-certificate.pem`, `claim-private.key`, and `AmazonRootCA1.pem` in `device-agent/certs/`.
 
 **3. Run the agent**
 
 ```bash
 cd device-agent
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 export IOT_ENDPOINT=$(aws iot describe-endpoint --endpoint-type iot:Data-ATS --query endpointAddress --output text)
 python agent.py
 ```
 
-First boot provisions the device. Every boot after that reconnects instantly using the saved identity.
+`IOT_ENDPOINT` is **required** — see the configuration table below. First boot provisions the device. Every boot after that reconnects instantly using the saved identity.
 
 **4. Run it as a service (recommended)**
 
 `deploy/edge-agent.service` runs the agent as an unprivileged `edge-agent` user, restarts it on failure, and runs `ota-boot-guard.sh` before every start. It expects the active release at `/var/lib/edge-agent/packages/current/bin/agent`, so each release package must contain an executable at `bin/agent`. The unit and the guard must agree on the state directory (`/var/lib/edge-agent` by default, override with `OTA_STATE_DIR` in **both**).
 
 The unit uses `Type=notify` with `WatchdogSec=120`; the agent sends `READY=1` once connected and subscribed, so `TimeoutStartSec=180` is set to cover first-boot provisioning.
+
+Install the guard with its executable bit intact — `ExecStartPre` cannot run a non-executable file, and a guard that does not run means no rollback:
+
+```bash
+sudo install -m 0755 device-agent/deploy/ota-boot-guard.sh /usr/local/bin/
+ls -l /usr/local/bin/ota-boot-guard.sh   # expect -rwxr-xr-x
+```
 
 ## Telemetry
 
@@ -163,17 +174,23 @@ The agent publishes a heartbeat every 30s to `secure-edge-fleet/telemetry/<thing
 { "thingName": "secure-edge-fleet-a1b2c3d4", "status": "online", "timestamp": 1727430000 }
 ```
 
+A Last Will on the same topic publishes `"status": "offline"` if the device drops without a clean disconnect.
+
+**Telemetry is currently published into the void.** The device policy grants `iot:Publish` and `iot:Receive` on the telemetry topic but no `iot:Subscribe`, so nothing — not a device, not a monitoring client using a device certificate — can read it. Routing telemetry (e.g. via an `aws_iot_topic_rule`) is tracked separately; until then, device liveness is only observable through IoT Jobs.
+
 ## Configuration
 
 All configuration is read from the environment.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `IOT_ENDPOINT` | a placeholder endpoint compiled into `agent.py` | Your account's IoT data endpoint. **Always set this** — the agent logs a warning when it falls back to the default. |
+| `IOT_ENDPOINT` | *(none — required)* | Your account's IoT data endpoint. The agent refuses to start without it: the endpoint is account-specific, so there is no safe default. |
 | `PROVISIONING_TEMPLATE` | `secure-edge-fleet-prov-template` | Must match the Terraform provisioning template. |
 | `CERTS_DIR` | `certs` | Where claim and device credentials live. |
 | `OTA_STATE_DIR` | `/var/lib/edge-agent` | Where the boot guard's `pending` / `boot_count` files live. Must match the guard script. |
 | `OTA_HEALTH_CHECK_CMD` | *(unset)* | Command that must exit 0 for a build to count as healthy. Unset, the default check only verifies that `current` points at a non-empty release. |
+| `OTA_ROLE_ALIAS` | *(unset)* | IoT role alias for the credential provider. When set, OTA downloads use `packageS3Uri` instead of a presigned URL, so nothing expires. |
+| `AWS_REGION` | `us-east-1` | Region for the credential-provider S3 fetch. |
 | `LOG_LEVEL` | `INFO` | Standard Python level names. |
 | `LOG_FORMAT` | *(text)* | Set to `json` for one JSON object per line. |
 
@@ -185,19 +202,49 @@ Packages are installed under `packages/` relative to the working directory, whic
 
 ```bash
 cd device-agent
-pip install pytest pytest-cov
+pip install -r requirements.txt pytest pytest-cov
 pytest
 ```
 
-The suite covers `ota_handler.py` (66 tests, including path-traversal, link-member, checksum, size-cap, atomic-activation and rollback cases). `agent.py` is not yet covered by automated tests.
+The Python suite covers `ota_handler.py`, `s3_fetch.py`, and `agent.py` (provisioning, boot-guard state machine, deferred `SUCCEEDED`, telemetry resilience), with the AWS SDK mocked — nothing touches the network.
+
+The boot guard is shell, and it is the one component whose failure is unrecoverable in the field, so it has its own contract suite rather than being covered only through the Python class that writes its state files:
+
+```bash
+sh device-agent/tests/t_ota_boot_guard.sh
+```
+
+That suite asserts the contract between `agent.py` and the guard: `pending` holds the previous version verbatim, `boot_count` increments per boot, rollback fires at exactly three unconfirmed boots, `current` always resolves, state is cleared after a rollback, and a corrupt `boot_count` is sanitised rather than aborting the script.
+
+The release tooling likewise runs offline:
+
+```bash
+bash tools/check_publish_release.sh
+```
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs six jobs on every push to `main` and every pull request:
+
+| Job | What it does |
+|---|---|
+| Terraform fmt & validate | `terraform fmt -check -recursive`, `init -backend=false`, `validate` |
+| Python tests | `pytest` on 3.9, 3.11 and 3.12 with coverage |
+| Shell contract tests | `t_ota_boot_guard.sh` plus `shellcheck` on the guard and the suite |
+| Release tooling | `tools/check_publish_release.sh` — a `--dry-run` publish against a temp build dir |
+| Security scans | Bandit, pip-audit, Checkov |
+
+The release-tooling job exists because nothing previously executed `publish_release.py`: a wrong AWS CLI flag reached `main` with every check green. A `--dry-run` publish costs nothing, touches no AWS resource, and exercises argument parsing, packaging, hashing and job-document construction for real.
 
 ## Security notes
 
-**Already in place:** required and validated SHA-256; `version` validated as a label before it touches a path; staged extraction that refuses link members, device nodes and path escapes; atomic activation and state writes; HTTPS-only size-capped downloads; a device IoT policy scoped to the connecting thing (`${iot:Connection.Thing.ThingName}`); a provisioning role limited to what the template does; an SSE-KMS encrypted, TLS-only, versioned OTA bucket with `force_destroy` enabled only when `environment = "dev"`; private keys created at `0600`.
+**Already in place:** required and validated SHA-256; `version` validated as a label before it touches a path; staged extraction that refuses link members, device nodes and path escapes; atomic activation and state writes; HTTPS-only size-capped downloads; a device IoT policy scoped to the connecting thing (`${iot:Connection.Thing.ThingName}`); a provisioning role limited to what the template does; an SSE-KMS encrypted, TLS-only, versioned OTA bucket with `force_destroy` enabled only when `environment = "dev"`; private keys created at `0600`; a boot guard that treats a corrupt `boot_count` as zero rather than aborting.
 
 **Still open:**
 
 - **Integrity is not authenticity.** The checksum travels in the same job document as the URL, so anyone who can call `iot:CreateJob` in this account can push an arbitrary package with a matching checksum to every targeted device. `hardening.tf` grants the publisher role write access to a `signatures/` prefix, but nothing signs or verifies a manifest yet. Until that exists, keep `iot:CreateJob` tightly held and attach the publisher policy only to CI, never to a human.
+- **Telemetry has no reader.** The device policy grants no `iot:Subscribe` on the telemetry topic, so nothing can observe heartbeats or the Last Will. See the [Telemetry](#telemetry) section.
+- **`hardening.tf` is a drop-in, applied by hand.** The device policy, provisioning role and bucket live there as replacements for `main.tf` blocks, so `terraform plan` does not show them until the two files are consolidated.
 - The claim certificate is a bootstrap credential shared by the fleet: restrict its policy and rotate it.
 - Object Lock on the OTA bucket can only be enabled at creation; see the note in `hardening.tf`.
 - Device certificates and keys are gitignored; keep `certs/` out of version control.
@@ -207,7 +254,8 @@ Updating the device policy creates a new policy version that takes effect immedi
 ## Roadmap
 
 - Sign release manifests and verify them on the device
-- Automated tests for `agent.py` (boot guard state machine, deferred `SUCCEEDED`, resubscribe on resume)
+- Route telemetry to CloudWatch/Timestream via an IoT rule, and add an observer identity that can read it
+- Consolidate `hardening.tf` into `main.tf` so `terraform plan` shows the security posture
 - Watchdog heartbeat tied to the main loop, so a stuck loop stops feeding systemd
 - Device Defender integration and dashboards
 - Fleet indexing and dynamic Thing Groups
