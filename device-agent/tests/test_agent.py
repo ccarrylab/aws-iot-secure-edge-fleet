@@ -48,6 +48,11 @@ THING = "thing-1"
 def _clean_env(monkeypatch):
     for var in ("NOTIFY_SOCKET", "WATCHDOG_USEC", "OTA_STATE_DIR"):
         monkeypatch.delenv(var, raising=False)
+    # ensure_endpoint() reads the environment first and falls back to the module
+    # attribute, so both of these have to be set for a test to see a real
+    # endpoint. Tests that want the refusal path override both.
+    monkeypatch.setattr(agent, "IOT_ENDPOINT", "example-ats.iot.us-east-1.amazonaws.com")
+    monkeypatch.setenv("IOT_ENDPOINT", "example-ats.iot.us-east-1.amazonaws.com")
 
 
 @pytest.fixture
@@ -135,6 +140,53 @@ def test_watchdog_inactive_without_interval_or_socket(monkeypatch):
     wd = agent.Watchdog(5.0)
     wd.start()
     assert wd._thread is None and sent == []
+
+
+# ------------------------------------------------------------------ endpoint
+# The endpoint has no sensible default: it is account-specific. ensure_endpoint()
+# is what stops a device from silently dialling someone else's hostname.
+#
+# Every test here clears BOTH the environment variable and the module attribute,
+# because ensure_endpoint() consults the environment first and the attribute
+# second. The autouse fixture sets both, so a test that omits this would be
+# asserting against a valid endpoint it never removed.
+class TestEnsureEndpoint:
+    def _clear(self, monkeypatch):
+        monkeypatch.delenv("IOT_ENDPOINT", raising=False)
+        monkeypatch.setattr(agent, "IOT_ENDPOINT", agent._DEFAULT_ENDPOINT)
+
+    def test_placeholder_is_refused(self, monkeypatch):
+        self._clear(monkeypatch)
+        with pytest.raises(SystemExit) as exc:
+            agent.ensure_endpoint()
+        assert "IOT_ENDPOINT" in str(exc.value)
+
+    def test_empty_is_refused(self, monkeypatch):
+        monkeypatch.delenv("IOT_ENDPOINT", raising=False)
+        monkeypatch.setattr(agent, "IOT_ENDPOINT", "")
+        with pytest.raises(SystemExit):
+            agent.ensure_endpoint()
+
+    def test_the_reserved_tld_default_is_refused(self, monkeypatch):
+        # Even with no env var, the compiled-in default must not be accepted.
+        monkeypatch.delenv("IOT_ENDPOINT", raising=False)
+        monkeypatch.setattr(agent, "IOT_ENDPOINT", agent._DEFAULT_ENDPOINT)
+        with pytest.raises(SystemExit):
+            agent.ensure_endpoint()
+
+    def test_a_real_endpoint_is_accepted(self):
+        agent.ensure_endpoint()  # the autouse fixture supplies a real one
+
+    def test_whitespace_only_is_refused(self, monkeypatch):
+        monkeypatch.setenv("IOT_ENDPOINT", "   ")
+        monkeypatch.setattr(agent, "IOT_ENDPOINT", "   ")
+        with pytest.raises(SystemExit):
+            agent.ensure_endpoint()
+
+    def test_the_module_default_is_the_reserved_tld(self):
+        # Guards against someone reintroducing an account-specific default.
+        assert agent._DEFAULT_ENDPOINT.endswith(".invalid")
+        assert "amazonaws.com" not in agent._DEFAULT_ENDPOINT
 
 
 # ------------------------------------------------------------------ boot guard
@@ -465,7 +517,6 @@ def env(monkeypatch, tmp_path, certs):
     conn = FakeConnection(lambda: handlers[signal.SIGTERM](signal.SIGTERM, None))
     state = tmp_path / "state"
     monkeypatch.setenv("OTA_STATE_DIR", str(state))
-    monkeypatch.setenv("IOT_ENDPOINT", "example-ats.iot.us-east-1.amazonaws.com")
     monkeypatch.setattr(agent, "_setup_logging", lambda: None)
     monkeypatch.setattr(agent, "ensure_root_ca", lambda: None)
     monkeypatch.setattr(agent, "load_existing_thing", lambda: THING)
@@ -484,7 +535,11 @@ def test_activation_defers_succeeded_and_arms_boot_guard(env, monkeypatch):
     monkeypatch.setattr(agent, "OTAHandler", make_fake_ota(on_handle=activate))
     env.conn.job = {"version": "1.2.0"}
 
-    agent.main()
+    # This is the restart path. The telemetry loop breaks with restart_requested
+    # set, and main() exits explicitly so systemd Restart=always brings the new
+    # build up. That explicit exit is part of the behaviour under test.
+    with pytest.raises(SystemExit):
+        agent.main()
 
     statuses = [b["status"] for b in job_updates(env.conn, "job-1")]
     assert "SUCCEEDED" not in statuses  # not until the new build has booted
