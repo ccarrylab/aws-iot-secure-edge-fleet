@@ -32,8 +32,8 @@ if [ "$count" -ge "$MAX_UNCONFIRMED_BOOTS" ]; then
         >> "$STATE_DIR/rollback.log" 2>/dev/null || true
 
     if [ -d "$STATE_DIR/packages/$previous" ]; then
-        # Atomic symlink swap: a partially written link is worse than none,
-        # because the device then starts nothing at all.
+        # Atomic swap: a half-written link is worse than no link, because the
+        # device then starts nothing at all.
         tmp_link="$STATE_DIR/packages/.current.rollback.$$"
         ln -s "$STATE_DIR/packages/$previous" "$tmp_link"
         mv -Tf "$tmp_link" "$STATE_DIR/packages/current"
@@ -44,7 +44,7 @@ if [ "$count" -ge "$MAX_UNCONFIRMED_BOOTS" ]; then
             >> "$STATE_DIR/rollback.log" 2>/dev/null || true
     fi
 
-    # pending.json belongs to the activation we just undid; leaving it behind
+    # pending.json describes the activation just undone; leaving it behind
     # would make the agent believe a confirmation is still owed for a version
     # that is no longer current.
     rm -f "$PENDING" "$BOOT_COUNT" "$STATE_DIR/pending.json"

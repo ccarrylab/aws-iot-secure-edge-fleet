@@ -369,18 +369,14 @@ def build_connection(client_id: str, cert: Path, key: Path, clean_session: bool,
 
     Nothing previously published a non-online status, so a device that died
     mid-heartbeat stayed "status": "online" in telemetry forever.
-
-    The real awscrt Will() rejects a str payload and requires `retain`
-    explicitly, so both are supplied here. The unit tests use a strict fake
-    with the same signature, which is what caught this.
     """
     will = mqtt.Will(
         topic="secure-edge-fleet/telemetry/%s" % client_id,
         payload=json.dumps(
             {"thingName": client_id, "status": "offline", "timestamp": 0}
-        ).encode("utf-8"),
+        ).encode("utf-8"),  # the real awscrt Will() rejects str payloads
         qos=mqtt.QoS.AT_LEAST_ONCE,
-        retain=False,
+        retain=False,  # required by the real awscrt Will()
     )
 
     def on_connection_interrupted(connection, error, **kwargs):
@@ -854,26 +850,18 @@ def main():
             # the process, taking the Jobs subscriptions with it.
             failures += 1
             log.warning("telemetry publish failed (%d in a row): %s", failures, e)
-            if failures >= 5:
-                log.error("too many consecutive telemetry failures - exiting for a clean restart")
-                break
+            stop.wait(min(30 * failures, 300))
+            continue
 
         stop.wait(30)
 
-    # -------------------------------------------------
-    # Shutdown
-    # -------------------------------------------------
     watchdog.stop()
-    log.info("disconnecting")
+    sd_notify("STATUS=stopping")
     try:
         mqtt_connection.disconnect().result()
     except Exception as e:
         log.warning("disconnect failed: %s", e)
-
-    if restart_requested.is_set():
-        # systemd Restart=always brings us straight back up on the new build.
-        log.info("exiting to let systemd start the new build")
-    sys.exit(0)
+    log.info("stopped")
 
 
 if __name__ == "__main__":

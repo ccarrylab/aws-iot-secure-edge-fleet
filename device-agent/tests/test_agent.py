@@ -255,10 +255,8 @@ def builder(certs, monkeypatch):
     captured = {}
 
     class FakeWill:
-        def __init__(self, topic, qos, payload, retain):
-            # No default for retain, and bytes-only payload: the real
-            # awscrt Will() enforces both, and a loose fake hid the bug.
-            if not isinstance(payload, bytes):
+        def __init__(self, topic, qos, payload, retain):  # no default: matches the real awscrt signature
+            if not isinstance(payload, bytes):  # the real awscrt Will() enforces this
                 raise TypeError("Will.payload must be bytes type")
             self.topic, self.qos, self.payload, self.retain = topic, qos, payload, retain
 
@@ -484,28 +482,91 @@ def test_activation_defers_succeeded_and_arms_boot_guard(env, monkeypatch):
         ota.on_status("SUCCEEDED", {"previous": "1.1.0", "version": "1.2.0"})
 
     monkeypatch.setattr(agent, "OTAHandler", make_fake_ota(on_handle=activate))
-    env.conn.job = {"version": "1.2.0", "packageUrl": "https://x/p.tar.gz", "checksum": "a" * 64}
+    env.conn.job = {"version": "1.2.0"}
 
-    with pytest.raises(SystemExit):
-        agent.main()
+    agent.main()
 
-    updates = job_updates(env.conn, "job-1")
-    assert [u["status"] for u in updates] == ["IN_PROGRESS", "IN_PROGRESS"]
-    assert updates[-1]["statusDetails"]["step"] == "restarting"
+    statuses = [b["status"] for b in job_updates(env.conn, "job-1")]
+    assert "SUCCEEDED" not in statuses  # not until the new build has booted
+    assert statuses == ["IN_PROGRESS", "IN_PROGRESS"]
     assert (env.state / "pending").read_text() == "1.1.0"
+    assert json.loads((env.state / "pending.json").read_text()) == {
+        "previous": "1.1.0", "jobId": "job-1", "version": "1.2.0",
+    }
+    assert env.conn.disconnected
 
 
-def test_unhealthy_build_reports_failed_and_leaves_pending(env, monkeypatch):
+def test_success_without_previous_is_passed_through(env, monkeypatch):
+    monkeypatch.setattr(agent, "OTAHandler", make_fake_ota(
+        on_handle=lambda o, d, j: o.on_status("SUCCEEDED", {"version": "1.2.0"})))
+    env.conn.job = {"version": "1.2.0"}
+    agent.main()
+    assert [b["status"] for b in job_updates(env.conn, "job-1")] == ["IN_PROGRESS", "SUCCEEDED"]
+    assert not (env.state / "pending").exists()
+
+
+def test_failed_ota_is_reported(env, monkeypatch):
+    monkeypatch.setattr(agent, "OTAHandler", make_fake_ota(
+        on_handle=lambda o, d, j: o.on_status("FAILED", {"error": "bad checksum"})))
+    env.conn.job = {"version": "1.2.0"}
+    agent.main()
+    updates = job_updates(env.conn, "job-1")
+    assert updates[-1] == {"status": "FAILED", "statusDetails": {"error": "bad checksum"}}
+
+
+def test_handler_exception_becomes_failed_job(env, monkeypatch):
+    def boom(ota, doc, job_id):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(agent, "OTAHandler", make_fake_ota(on_handle=boom))
+    env.conn.job = {"version": "1.2.0"}
+    agent.main()
+    last = job_updates(env.conn, "job-1")[-1]
+    assert last["status"] == "FAILED" and "boom" in last["statusDetails"]["error"]
+
+
+def test_redelivered_job_runs_once(env, monkeypatch):
+    fake = make_fake_ota(on_handle=lambda o, d, j: o.on_status("FAILED", {"error": "x"}))
+    monkeypatch.setattr(agent, "OTAHandler", fake)
+    env.conn.job = {"version": "1.2.0"}
+    env.conn.deliveries = 2
+    agent.main()
+    assert len(fake.instances[0].handled) == 1
+
+
+def test_terminal_and_empty_jobs_are_ignored(env, monkeypatch):
+    fake = make_fake_ota()
+    monkeypatch.setattr(agent, "OTAHandler", fake)
+    env.conn.job = {"version": "1.2.0"}
+    env.conn.job_status = "SUCCEEDED"
+    agent.main()
+    assert fake.instances[0].handled == [] and job_updates(env.conn, "job-1") == []
+
+
+def test_empty_job_document_is_ignored(env, monkeypatch):
+    fake = make_fake_ota()
+    monkeypatch.setattr(agent, "OTAHandler", fake)
+    env.conn.job = {}
+    agent.main()
+    assert fake.instances[0].handled == []
+
+
+def test_startup_confirms_healthy_build_and_reports_succeeded(env, monkeypatch):
+    agent.BootGuard(env.state).arm("1.1.0", "job-9", "1.2.0")
+    monkeypatch.setattr(agent, "OTAHandler", make_fake_ota(healthy=True))
+    agent.main()
+    assert not (env.state / "pending").exists()
+    assert job_updates(env.conn, "job-9") == [
+        {"status": "SUCCEEDED", "statusDetails": {"version": "1.2.0", "step": "confirmed"}}
+    ]
+
+
+def test_startup_unhealthy_build_reports_failed_and_leaves_guard_armed(env, monkeypatch):
+    agent.BootGuard(env.state).arm("1.1.0", "job-9", "1.2.0")
     monkeypatch.setattr(agent, "OTAHandler", make_fake_ota(healthy=False))
-    (env.state).mkdir(parents=True, exist_ok=True)
-    (env.state / "pending").write_text("1.1.0")
-    (env.state / "pending.json").write_text(
-        json.dumps({"previous": "1.1.0", "jobId": "job-9", "version": "1.2.0"})
-    )
-
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as exc:
         agent.main()
-
+    assert exc.value.code == 1
     assert job_updates(env.conn, "job-9")[-1]["status"] == "FAILED"
     assert (env.state / "pending").exists()  # the shell guard needs this to roll back
 
@@ -549,25 +610,56 @@ def test_no_role_alias_means_no_fetcher(env, monkeypatch):
 
 # ------------------------------------------------------------------ main(): resilience + provisioning
 def test_telemetry_failure_does_not_kill_the_agent(env):
-    env.conn.telemetry_error = RuntimeError("broker gone")
-    env.conn.job = None
-    agent.main()  # must return normally, not raise
-    assert env.conn._telemetry_calls >= 5
+    env.conn.telemetry_error = RuntimeError("net down")
+    agent.main()  # must return normally
+    assert env.conn.disconnected
 
 
-def test_main_provisions_when_no_credentials_exist(env, monkeypatch):
+def _fake_provisioner(ok):
+    class FakeProvisioner:
+        def __init__(self, conn, serial):
+            self.thing_name = THING
+            self.error = None if ok else "boom"
+
+        def start(self):
+            pass
+
+        def wait(self):
+            return ok
+
+    return FakeProvisioner
+
+
+def test_first_boot_provisions_then_reconnects_as_thing(env, monkeypatch):
+    ids = []
     monkeypatch.setattr(agent, "load_existing_thing", lambda: None)
-    monkeypatch.setattr(agent, "load_or_create_serial", lambda: "serial-1")
-    monkeypatch.setattr(agent, "save_device_credentials", lambda *a: None)
-    fake_conn = env.conn
-
-    def fake_build(client_id, cert, key, clean_session, on_resume=None):
-        fake_conn.client_id = client_id
-        return fake_conn
-
-    monkeypatch.setattr(agent, "build_connection", fake_build)
-    monkeypatch.setattr(agent, "FleetProvisioner", lambda conn, serial: SimpleNamespace(
-        thing_name=THING, start=lambda: None, wait=lambda timeout=90: True, error=None,
-    ))
+    monkeypatch.setattr(agent, "load_or_create_serial", lambda: "abc")
+    monkeypatch.setattr(agent, "FleetProvisioner", _fake_provisioner(True))
+    monkeypatch.setattr(agent, "build_connection",
+                        lambda client_id, *a, **k: ids.append(client_id) or env.conn)
     agent.main()
-    assert fake_conn.client_id == "claim-serial-1"
+    assert ids == ["claim-abc", THING]
+
+
+def test_provisioning_failure_exits_nonzero(env, monkeypatch):
+    monkeypatch.setattr(agent, "load_existing_thing", lambda: None)
+    monkeypatch.setattr(agent, "load_or_create_serial", lambda: "abc")
+    monkeypatch.setattr(agent, "FleetProvisioner", _fake_provisioner(False))
+    with pytest.raises(SystemExit) as exc:
+        agent.main()
+    assert exc.value.code == 1
+    assert env.conn.disconnected
+
+
+def test_job_redelivered_mid_confirmation_is_not_rerun(env, monkeypatch):
+    """After a restart AWS hands back the still-IN_PROGRESS job. Re-running it
+    would report FAILED ("already installed") and race the real SUCCEEDED."""
+    agent.BootGuard(env.state).arm("1.1.0", "job-1", "1.2.0")
+    fake = make_fake_ota(healthy=True)
+    monkeypatch.setattr(agent, "OTAHandler", fake)
+    env.conn.job = {"version": "1.2.0"}
+    env.conn.job_status = "IN_PROGRESS"
+    env.conn.redeliver_on_get = True
+    agent.main()
+    assert fake.instances[0].handled == []
+    assert [b["status"] for b in job_updates(env.conn, "job-1")] == ["SUCCEEDED"]

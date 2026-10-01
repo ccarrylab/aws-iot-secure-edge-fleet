@@ -33,12 +33,11 @@ ExecStart=/var/lib/edge-agent/packages/current/bin/agent
 Restart=always
 RestartSec=5
 
-# The agent calls sd_notify(READY=1) once it is connected, subscribed, and has
-# resolved any pending activation, then keeps sending WATCHDOG=1 from a
-# dedicated thread. That is what turns "the release will not start" into an
-# automatic rollback instead of a boot loop: if the loop wedges, systemd stops
-# being fed and restarts the unit, and the boot guard's unconfirmed-boot count
-# then rolls the device back.
+# The agent sends READY=1 once it is connected, subscribed, and any pending
+# activation is resolved, then keeps feeding WATCHDOG=1 from its own thread.
+# With this off, a wedged agent is never restarted and the boot guard's
+# unconfirmed-boot count never advances, so a release that will not run has
+# no path to rollback.
 WatchdogSec=120
 
 # --- hardening -------------------------------------------------------------
