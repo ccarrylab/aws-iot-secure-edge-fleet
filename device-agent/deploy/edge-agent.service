@@ -18,7 +18,9 @@ StartLimitIntervalSec=300
 StartLimitBurst=5
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
+TimeoutStartSec=180
 User=edge-agent
 Group=edge-agent
 WorkingDirectory=/var/lib/edge-agent
@@ -31,20 +33,12 @@ ExecStart=/var/lib/edge-agent/packages/current/bin/agent
 Restart=always
 RestartSec=5
 
-# WatchdogSec is DISABLED on purpose.
-#
-# It requires the agent to call sd_notify(READY=1) and then keep sending
-# WATCHDOG=1 keepalives. The agent in this repo does not implement sd_notify
-# yet, so with "Type=notify" systemd would wait for a readiness notification
-# that never arrives, hit the timeout, and restart the unit in a loop on every
-# device.
-#
-# Re-enable BOTH parts once the agent calls sd_notify:
-#     Type=notify
-#     WatchdogSec=120
-# That is what turns "the release will not start" into an automatic rollback
-# instead of a boot-loop.
-# WatchdogSec=120
+# The agent sends READY=1 once it is connected, subscribed, and any pending
+# activation is resolved, then keeps feeding WATCHDOG=1 from its own thread.
+# With this off, a wedged agent is never restarted and the boot guard's
+# unconfirmed-boot count never advances, so a release that will not run has
+# no path to rollback.
+WatchdogSec=120
 
 # --- hardening -------------------------------------------------------------
 NoNewPrivileges=yes

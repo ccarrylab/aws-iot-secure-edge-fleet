@@ -373,7 +373,6 @@ def main(argv=None):
     else:
         info("  rollbackVersion: none - no completed job found; devices keep their own previous")
 
-    s3_uri = "s3://%s/packages/%s.tar.gz" % (args.bucket, args.version)
     document = build_document(args.version, url, checksum, rollback, s3_uri=s3_uri)
     doc_path = os.path.join(tmpdir, "job-document.json")
     with open(doc_path, "w") as fh:

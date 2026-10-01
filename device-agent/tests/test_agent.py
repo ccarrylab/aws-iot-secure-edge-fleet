@@ -28,7 +28,7 @@ except ImportError:  # SDK not installed: minimal stand-ins so agent.py imports
         AT_LEAST_ONCE = 1
 
     class _Will:
-        def __init__(self, topic, qos, payload, retain=False):
+        def __init__(self, topic, qos, payload, retain):
             self.topic, self.qos, self.payload, self.retain = topic, qos, payload, retain
 
     _awscrt = types.ModuleType("awscrt")
@@ -255,8 +255,10 @@ def builder(certs, monkeypatch):
     captured = {}
 
     class FakeWill:
-        def __init__(self, topic, qos, payload, retain=False):
-            self.topic, self.qos, self.payload = topic, qos, payload
+        def __init__(self, topic, qos, payload, retain):  # no default: matches the real awscrt signature
+            if not isinstance(payload, bytes):  # the real awscrt Will() enforces this
+                raise TypeError("Will.payload must be bytes type")
+            self.topic, self.qos, self.payload, self.retain = topic, qos, payload, retain
 
     monkeypatch.setattr(agent.mqtt, "Will", FakeWill)
     monkeypatch.setattr(
@@ -277,6 +279,8 @@ def test_build_connection_registers_offline_will(builder):
     assert builder["keep_alive_secs"] == 30
     will = builder["will"]
     assert will.topic == "secure-edge-fleet/telemetry/dev-1"
+    assert will.retain is False
+    assert isinstance(will.payload, bytes)
     assert json.loads(will.payload)["status"] == "offline"
 
 

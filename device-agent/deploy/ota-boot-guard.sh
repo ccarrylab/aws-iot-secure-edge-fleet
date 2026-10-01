@@ -22,7 +22,15 @@ MAX_UNCONFIRMED_BOOTS=3
 [ -f "$PENDING" ] || exit 0        # nothing pending, nothing to do
 
 mkdir -p "$STATE_DIR"
+
+# A corrupt or truncated boot_count must not abort this script. Under `set -e`
+# the arithmetic below is a fatal expansion error with a non-numeric value, and
+# this script is the only thing that can roll a device back off a release that
+# will not start. Failing here means failing open, on the broken build.
 count=$(cat "$BOOT_COUNT" 2>/dev/null || echo 0)
+case "$count" in
+    ''|*[!0-9]*) count=0 ;;
+esac
 count=$((count + 1))
 echo "$count" > "$BOOT_COUNT"
 
@@ -32,7 +40,11 @@ if [ "$count" -ge "$MAX_UNCONFIRMED_BOOTS" ]; then
         >> "$STATE_DIR/rollback.log" 2>/dev/null || true
 
     if [ -d "$STATE_DIR/packages/$previous" ]; then
-        ln -sfn "$STATE_DIR/packages/$previous" "$STATE_DIR/packages/current"
+        # Atomic swap: a half-written link is worse than no link, because the
+        # device then starts nothing at all.
+        tmp_link="$STATE_DIR/packages/.current.rollback.$$"
+        ln -s "$STATE_DIR/packages/$previous" "$tmp_link"
+        mv -Tf "$tmp_link" "$STATE_DIR/packages/current"
         echo "ota-boot-guard: $(date -u +%FT%TZ) rolled back to $previous" \
             >> "$STATE_DIR/rollback.log" 2>/dev/null || true
     else
@@ -40,7 +52,10 @@ if [ "$count" -ge "$MAX_UNCONFIRMED_BOOTS" ]; then
             >> "$STATE_DIR/rollback.log" 2>/dev/null || true
     fi
 
-    rm -f "$PENDING" "$BOOT_COUNT"
+    # pending.json describes the activation just undone; leaving it behind
+    # would make the agent believe a confirmation is still owed for a version
+    # that is no longer current.
+    rm -f "$PENDING" "$BOOT_COUNT" "$STATE_DIR/pending.json"
 fi
 
 exit 0
