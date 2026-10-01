@@ -16,6 +16,7 @@
 #   - "current" still resolves to a real directory after a rollback
 #   - state files are cleared once a rollback has happened
 #   - with no "pending" file the guard is a no-op
+#   - a corrupt boot_count is sanitised rather than aborting the script
 #
 # Usage:  sh device-agent/tests/t_ota_boot_guard.sh [path-to-guard]
 # Exit 0 = pass, 1 = failure.
@@ -35,6 +36,7 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 
 PASS=0
 FAIL=0
+GUARD_RC=0
 
 ok()    { PASS=$((PASS + 1)); printf '  ok   %s\n' "$1"; }
 bad()   { FAIL=$((FAIL + 1)); printf '  FAIL %s\n' "$1"; }
@@ -53,7 +55,15 @@ reset_state() {
     ln -s "$SD/packages/1.1.0" "$SD/packages/current"
 }
 
-run_guard() { OTA_STATE_DIR="$SD" sh "$GUARD" >/dev/null 2>&1; }
+# Capture the status IMMEDIATELY into GUARD_RC. Reading $? in the argument
+# list of a later command reports that command's status instead - and a
+# command substitution in the same list counts as another command. That is how
+# an earlier version of this file asserted 2 rather than the guard's status.
+run_guard() {
+    OTA_STATE_DIR="$SD" sh "$GUARD" >/dev/null 2>&1
+    GUARD_RC=$?
+    return 0
+}
 
 echo "ota-boot-guard.sh contract tests"
 echo "  guard: $GUARD"
@@ -62,7 +72,7 @@ echo "  guard: $GUARD"
 echo "no pending file (nothing to undo):"
 reset_state
 run_guard
-check "exit status 0" "0" "$?"
+check "exit status 0" "0" "$GUARD_RC"
 check "current untouched" "$SD/packages/1.1.0" "$(readlink "$SD/packages/current")"
 check "no boot_count written" "no" "$([ -e "$SD/boot_count" ] && echo yes || echo no)"
 
@@ -114,7 +124,9 @@ reset_state
 printf '1.0.0' > "$SD/pending"
 printf 'garbage' > "$SD/boot_count"
 run_guard
-check "survives a non-numeric count" "0" "$?"
+check "exits cleanly on a non-numeric count" "0" "$GUARD_RC"
+check "non-numeric count treated as 0, then incremented" "1" "$(cat "$SD/boot_count")"
+check "no rollback on the first boot after a corrupt count" "$SD/packages/1.1.0" "$(readlink "$SD/packages/current")"
 
 # ---------------------------------------------------------------------------
 echo "repeated runs are idempotent once rolled back:"
