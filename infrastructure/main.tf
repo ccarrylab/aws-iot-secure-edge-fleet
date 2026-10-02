@@ -1,6 +1,6 @@
---------------------------------------------------------------
-Global Identity and Locals
---------------------------------------------------------------
+# --------------------------------------------------------------
+# Global Identity and Locals
+# --------------------------------------------------------------
 data "aws_caller_identity" "current" {}
 
 locals {
@@ -8,9 +8,9 @@ locals {
   iot_arn    = "arn:aws:iot:${var.aws_region}:${local.account_id}"
 }
 
---------------------------------------------------------------
-Basic IoT Core resources
---------------------------------------------------------------
+# --------------------------------------------------------------
+# Basic IoT Core resources
+# --------------------------------------------------------------
 
 resource "aws_iot_thing_group" "edge_fleet" {
   name = "${var.project_name}-fleet"
@@ -25,9 +25,9 @@ resource "aws_iot_thing_group" "edge_fleet" {
   }
 }
 
---------------------------------------------------------------
-Device Security
---------------------------------------------------------------
+# --------------------------------------------------------------
+# Device Security
+# --------------------------------------------------------------
 
 resource "aws_iot_policy" "device_policy" {
   name = "${var.project_name}-device-policy"
@@ -77,9 +77,9 @@ resource "aws_iot_policy" "device_policy" {
   })
 }
 
---------------------------------------------------------------
-Fleet Provisioning
---------------------------------------------------------------
+# --------------------------------------------------------------
+# Fleet Provisioning
+# --------------------------------------------------------------
 
 resource "aws_iam_role" "fleet_provisioning" {
   name = "${var.project_name}-fleet-provisioning-role"
@@ -183,31 +183,31 @@ resource "aws_iot_policy" "claim_policy" {
       {
         Effect = "Allow"
         Action = ["iot:Connect"]
-        Resource = ["arn:aws:iot:${var.aws_region}::client/claim-"]
+        Resource = ["arn:aws:iot:${var.aws_region}:*:client/claim-*"]
       },
       {
         Effect = "Allow"
         Action = ["iot:Publish", "iot:Receive"]
         Resource = [
-          "arn:aws:iot:${var.aws_region}::topic/$aws/certificates/create/",
-          "arn:aws:iot:${var.aws_region}::topic/$aws/provisioning-templates/${var.project_name}-prov-template/provision/"
+          "arn:aws:iot:${var.aws_region}:*:topic/$aws/certificates/create/*",
+          "arn:aws:iot:${var.aws_region}:*:topic/$aws/provisioning-templates/${var.project_name}-prov-template/provision/*"
         ]
       },
       {
         Effect = "Allow"
         Action = ["iot:Subscribe"]
         Resource = [
-          "arn:aws:iot:${var.aws_region}::topicfilter/$aws/certificates/create/",
-          "arn:aws:iot:${var.aws_region}::topicfilter/$aws/provisioning-templates/${var.project_name}-prov-template/provision/"
+          "arn:aws:iot:${var.aws_region}:*:topicfilter/$aws/certificates/create/*",
+          "arn:aws:iot:${var.aws_region}:*:topicfilter/$aws/provisioning-templates/${var.project_name}-prov-template/provision/*"
         ]
       }
     ]
   })
 }
 
---------------------------------------------------------------
-OTA Supply Chain
---------------------------------------------------------------
+# --------------------------------------------------------------
+# OTA Supply Chain
+# --------------------------------------------------------------
 
 data "aws_iam_policy_document" "ota_kms_policy" {
   statement {
@@ -322,9 +322,9 @@ resource "aws_iam_policy" "ota_publisher" {
   })
 }
 
---------------------------------------------------------------
-Observability (Logging & Telemetry)
---------------------------------------------------------------
+# --------------------------------------------------------------
+# Observability (Logging & Telemetry)
+# --------------------------------------------------------------
 
 resource "aws_cloudwatch_log_group" "iot_core" {
   name              = "/aws/iot/${var.project_name}-core"
@@ -375,9 +375,9 @@ resource "aws_iot_topic_rule" "telemetry_route" {
   }
 }
 
---------------------------------------------------------------
-Monitoring (Dead Man's Switch)
---------------------------------------------------------------
+# --------------------------------------------------------------
+# Monitoring (Dead Man's Switch)
+# --------------------------------------------------------------
 
 resource "aws_sns_topic" "fleet_alerts" {
   name = "${var.project_name}-fleet-alerts"
@@ -385,7 +385,7 @@ resource "aws_sns_topic" "fleet_alerts" {
 
 resource "aws_cloudwatch_log_metric_filter" "telemetry_heartbeat" {
   name           = "TelemetryHeartbeat"
-  pattern        = "{ $.status = \"online\" }"
+  pattern        = "{ $.status = "online" }"
   log_group_name = aws_cloudwatch_log_group.iot_core.name
 
   metric_transformation {
@@ -400,7 +400,7 @@ resource "aws_cloudwatch_metric_alarm" "device_offline" {
   comparison_operator = "LessThanThreshold"
   evaluation_periods  = "3"
   metric_name         = "HeartbeatCount"
-  namespace           = "SecureEdge umaL_C_L_T_B"
+  namespace           = "SecureEdgeFleet"
   period              = "300"
   statistic           = "Sum"
   threshold           = "1"
