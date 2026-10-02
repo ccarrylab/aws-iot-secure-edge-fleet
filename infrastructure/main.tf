@@ -2,20 +2,16 @@
 # Global Identity and Locals
 # --------------------------------------------------------------
 data "aws_caller_identity" "current" {}
-
 locals {
   account_id = data.aws_caller_identity.current.account_id
   iot_arn    = "arn:aws:iot:${var.aws_region}:${local.account_id}"
 }
-
 # --------------------------------------------------------------
 # Basic IoT Core resources
 # --------------------------------------------------------------
-
 # Thing Group for the fleet
 resource "aws_iot_thing_group" "edge_fleet" {
   name = "${var.project_name}-fleet"
-
   properties {
     attribute_payload {
       attributes = {
@@ -25,14 +21,11 @@ resource "aws_iot_thing_group" "edge_fleet" {
     }
   }
 }
-
 # --------------------------------------------------------------
 # Device Security (C4)
 # --------------------------------------------------------------
-
 resource "aws_iot_policy" "device_policy" {
   name = "${var.project_name}-device-policy"
-
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -77,15 +70,12 @@ resource "aws_iot_policy" "device_policy" {
     ]
   })
 }
-
 # --------------------------------------------------------------
 # Fleet Provisioning (by Claim)
 # --------------------------------------------------------------
-
 # IAM role that Fleet Provisioning will assume
 resource "aws_iam_role" "fleet_provisioning" {
   name = "${var.project_name}-fleet-provisioning-role"
-
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -99,12 +89,10 @@ resource "aws_iam_role" "fleet_provisioning" {
     ]
   })
 }
-
 # H5 — the provisioning role, scoped to what the template actually does
 resource "aws_iam_role_policy" "fleet_provisioning" {
   name = "${var.project_name}-fleet-provisioning-policy"
   role = aws_iam_role.fleet_provisioning.id
-
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -155,14 +143,12 @@ resource "aws_iam_role_policy" "fleet_provisioning" {
     ]
   })
 }
-
 # Fleet Provisioning Template
 resource "aws_iot_provisioning_template" "edge_fleet" {
   name                  = "${var.project_name}-prov-template"
   description           = "Provisioning template for secure edge fleet devices"
   enabled               = true
   provisioning_role_arn = aws_iam_role.fleet_provisioning.arn
-
   template_body = jsonencode({
     Parameters = {
       SerialNumber = {
@@ -201,11 +187,9 @@ resource "aws_iot_provisioning_template" "edge_fleet" {
     }
   })
 }
-
 # Claim Certificate Policy (for Fleet Provisioning by Claim)
 resource "aws_iot_policy" "claim_policy" {
   name = "${var.project_name}-claim-policy"
-
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -238,48 +222,38 @@ resource "aws_iot_policy" "claim_policy" {
     ]
   })
 }
-
 # --------------------------------------------------------------
 # OTA Supply Chain (H8)
 # --------------------------------------------------------------
-
 resource "aws_kms_key" "ota" {
   description             = "Encryption for ${var.project_name} OTA packages"
   deletion_window_in_days = 30
   enable_key_rotation     = true
   policy = data.aws_iam_policy_document.ota_kms_policy.json
 }
-
 resource "aws_kms_alias" "ota" {
   name          = "alias/${var.project_name}-ota"
   target_key_id = aws_kms_key.ota.key_id
 }
-
 resource "aws_s3_bucket" "ota_packages" {
   bucket = "${var.project_name}-ota-packages-${var.environment}"
   force_destroy = var.environment == "dev"
 }
-
 resource "aws_s3_bucket_versioning" "ota_packages" {
   bucket = aws_s3_bucket.ota_packages.id
-
   versioning_configuration {
     status = "Enabled"
   }
 }
-
 resource "aws_s3_bucket_public_access_block" "ota_packages" {
   bucket = aws_s3_bucket.ota_packages.id
-
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
   restrict_public_buckets = true
 }
-
 resource "aws_s3_bucket_server_side_encryption_configuration" "ota_packages" {
   bucket = aws_s3_bucket.ota_packages.id
-
   rule {
     apply_server_side_encryption_by_default {
       sse_algorithm     = "aws:kms"
@@ -288,15 +262,12 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "ota_packages" {
     bucket_key_enabled = true
   }
 }
-
 resource "aws_s3_bucket_ownership_controls" "ota_packages" {
   bucket = aws_s3_bucket.ota_packages.id
   rule { object_ownership = "BucketOwnerEnforced" }
 }
-
 resource "aws_s3_bucket_policy" "ota_packages" {
   bucket = aws_s3_bucket.ota_packages.id
-
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -312,10 +283,8 @@ resource "aws_s3_bucket_policy" "ota_packages" {
     }]
   })
 }
-
 resource "aws_s3_bucket_lifecycle_configuration" "ota_packages" {
   bucket = aws_s3_bucket.ota_packages.id
-
   rule {
     id     = "expire-old-releases"
     status = "Enabled"
@@ -324,11 +293,9 @@ resource "aws_s3_bucket_lifecycle_configuration" "ota_packages" {
     abort_incomplete_multipart_upload { days_after_initiation = 7 }
   }
 }
-
 resource "aws_iam_policy" "ota_publisher" {
   name        = "${var.project_name}-ota-publisher"
   description = "Write OTA releases only. Attach to the CI role, never to a human."
-
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -353,20 +320,16 @@ resource "aws_iam_policy" "ota_publisher" {
     ]
   })
 }
-
 # --------------------------------------------------------------
 # Observability (Logging & Telemetry)
 # --------------------------------------------------------------
-
 resource "aws_cloudwatch_log_group" "iot_core" {
   name              = "/aws/iot/${var.project_name}-core"
   retention_in_days = 365
   kms_key_id        = aws_kms_key.ota.arn
 }
-
 resource "aws_iam_role" "iot_logging" {
   name = "${var.project_name}-iot-logging-role"
-
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -380,11 +343,9 @@ resource "aws_iam_role" "iot_logging" {
     ]
   })
 }
-
 resource "aws_iam_role_policy" "iot_logging" {
   name = "${var.project_name}-iot-logging-policy"
   role = aws_iam_role.iot_logging.id
-
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -399,13 +360,10 @@ resource "aws_iam_role_policy" "iot_logging" {
     ]
   })
 }
-
 resource "aws_iot_logging_options" "core" {
   role_arn = aws_iam_role.iot_logging.arn
   default_log_level = "INFO"
 }
-
-
 data "aws_iam_policy_document" "ota_kms_policy" {
   statement {
     sid    = "Enable IAM User Permissions"
@@ -418,57 +376,42 @@ data "aws_iam_policy_document" "ota_kms_policy" {
     resources = ["*"]
   }
 }
-
 resource "aws_s3_bucket" "log_bucket" {
   bucket = "${var.project_name}-logs-${var.environment}"
 }
-
 resource "aws_s3_bucket_ownership_controls" "log_bucket_oc" {
   bucket = aws_s3_bucket.log_bucket.id
   rule { object_ownership = "BucketOwnerPreferred" }
 }
-
 resource "aws_s3_bucket_acl" "log_bucket_acl" {
   bucket = aws_s3_bucket.log_bucket.id
   acl    = "log-delivery-write"
 }
-
 resource "aws_s3_bucket_logging" "ota_logging" {
   bucket = aws_s3_bucket.ota_packages.id
   target_bucket = aws_s3_bucket.log_bucket.id
   target_prefix = "log/"
 }
-
-
 resource "aws_s3_bucket_notification" "ota_notification" {
   bucket = aws_s3_bucket.ota_packages.id
-
   topic {
     topic_arn     = aws_sns_topic.fleet_alerts.arn
     events        = ["s3:ObjectCreated:*"]
   }
 }
-
---------------------------------------------------------------
-Monitoring (Dead Man's Switch)
---------------------------------------------------------------
-
 resource "aws_sns_topic" "fleet_alerts" {
   name = "${var.project_name}-fleet-alerts"
 }
-
 resource "aws_cloudwatch_log_metric_filter" "telemetry_heartbeat" {
   name           = "TelemetryHeartbeat"
   pattern        = "{ $.status = \"online\" }"
   log_group_name = aws_cloudwatch_log_group.iot_core.name
-
   metric_transformation {
     name      = "HeartbeatCount"
     namespace = "SecureEdgeFleet"
     value     = "1"
   }
 }
-
 resource "aws_cloudwatch_metric_alarm" "device_offline" {
   alarm_name          = "${var.project_name}-device-offline"
   comparison_operator = "LessThanThreshold"
@@ -480,10 +423,8 @@ resource "aws_cloudwatch_metric_alarm" "device_offline" {
   threshold           = "1"
   alarm_actions       = [aws_sns_topic.fleet_alerts.arn]
 }
-
 resource "aws_s3_bucket_notification" "ota_notification" {
   bucket = aws_s3_bucket.ota_packages.id
-
   topic {
     topic_arn     = aws_sns_topic.fleet_alerts.arn
     events        = ["s3:ObjectCreated:*"]
