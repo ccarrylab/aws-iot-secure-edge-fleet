@@ -448,7 +448,7 @@ resource "aws_s3_bucket" "log_bucket" {
 
 resource "aws_s3_bucket_ownership_controls" "log_bucket_oc" {
   bucket = aws_s3_bucket.log_bucket.id
-  rule { object_ownership = "BucketOwnerEnforced" }
+  rule { object_ownership = "BucketOwnerPreferred" }
 }
 
 resource "aws_s3_bucket_public_access_block" "log_bucket_public_access" {
