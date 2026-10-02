@@ -435,7 +435,7 @@ resource "aws_sns_topic_policy" "fleet_alerts_policy" {
         Action   = "sns:Publish"
         Resource = [aws_sns_topic.fleet_alerts.arn]
         Condition = {
-          ArnLike = { "aws:SourceArn" = aws_s3_bucket.ota_packages.arn }
+          ArnLike = { "aws:SourceArn" = [aws_s3_bucket.ota_packages.arn, aws_s3_bucket.log_bucket.arn] }
         }
       },
     ]
