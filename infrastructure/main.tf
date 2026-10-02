@@ -53,7 +53,7 @@ resource "aws_iot_policy" "device_policy" {
       {
         Sid      = "SubscribeToOwnJobsOnly"
         Effect   = "Allow"
-        Action = ["iot:Subscribe"]
+        Action   = ["iot:Subscribe"]
         Resource = ["${local.iot_arn}:topicfilter/$aws/things/$${iot:Connection.Thing.ThingName}/jobs/*"]
       },
       {
@@ -70,7 +70,7 @@ resource "aws_iot_policy" "device_policy" {
       {
         Sid      = "AssumeOtaReadRole"
         Effect   = "Allow"
-        Action = ["iot:AssumeRoleWithCertificate"]
+        Action   = ["iot:AssumeRoleWithCertificate"]
         Resource = ["${local.iot_arn}:rolealias/${var.project_name}-device-ota-read"]
       }
     ]
@@ -87,9 +87,9 @@ resource "aws_iam_role" "fleet_provisioning" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect = "Allow"
+      Effect    = "Allow"
       Principal = { Service = "iot.amazonaws.com" }
-      Action = "sts:AssumeRole"
+      Action    = "sts:AssumeRole"
     }]
   })
 }
@@ -113,27 +113,27 @@ resource "aws_iam_role_policy" "fleet_provisioning" {
         Resource = ["${local.iot_arn}:thing/${var.project_name}-*"]
       },
       {
-        Sid    = "ManageCertificates"
-        Effect = "Allow"
-        Action = ["iot:RegisterCertificate", "iot:DescribeCertificate", "iot:UpdateCertificate"]
+        Sid      = "ManageCertificates"
+        Effect   = "Allow"
+        Action   = ["iot:RegisterCertificate", "iot:DescribeCertificate", "iot:UpdateCertificate"]
         Resource = ["${local.iot_arn}:cert/*"]
       },
       {
-        Sid    = "AttachTheDevicePolicyOnly"
+        Sid      = "AttachTheDevicePolicyOnly"
         Effect   = "Allow"
-        Action = ["iot:AttachPolicy", "iot:ListAttachedPolicies"]
+        Action   = ["iot:AttachPolicy", "iot:ListAttachedPolicies"]
         Resource = ["${local.iot_arn}:policy/${var.project_name}-device-policy"]
       },
       {
-        Sid    = "ReadTheFleetGroup"
-        Effect = "Allow"
-        Action = ["iot:DescribeThingGroup", "iot:ListThingGroups"]
+        Sid      = "ReadTheFleetGroup"
+        Effect   = "Allow"
+        Action   = ["iot:DescribeThingGroup", "iot:ListThingGroups"]
         Resource = ["${local.iot_arn}:thinggroup/${var.project_name}-fleet"]
       },
       {
-        Sid    = "RegisterAgainstTheTemplate"
+        Sid      = "RegisterAgainstTheTemplate"
         Effect   = "Allow"
-        Action = ["iot:RegisterThing"]
+        Action   = ["iot:RegisterThing"]
         Resource = ["${local.iot_arn}:provisioningtemplate/${var.project_name}-prov-template"]
       }
     ]
@@ -168,7 +168,7 @@ resource "aws_iot_provisioning_template" "edge_fleet" {
         }
       }
       policy = {
-        Type = "AWS::IoT::Policy"
+        Type       = "AWS::IoT::Policy"
         Properties = { PolicyName = aws_iot_policy.device_policy.name }
       }
     }
@@ -181,8 +181,8 @@ resource "aws_iot_policy" "claim_policy" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect = "Allow"
-        Action = ["iot:Connect"]
+        Effect   = "Allow"
+        Action   = ["iot:Connect"]
         Resource = ["arn:aws:iot:${var.aws_region}:*:client/claim-*"]
       },
       {
@@ -226,15 +226,15 @@ resource "aws_kms_key_policy" "ota_restricted" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "Enable IAM User Permissions"
-        Effect = "Allow"
+        Sid       = "Enable IAM User Permissions"
+        Effect    = "Allow"
         Principal = { AWS = "${data.aws_caller_identity.current.arn}" }
-        Action   = "kms:*"
-        Resource = "*"
+        Action    = "kms:*"
+        Resource  = "*"
       },
       {
-        Sid    = "AllowCloudWatchLogs"
-        Effect = "Allow"
+        Sid       = "AllowCloudWatchLogs"
+        Effect    = "Allow"
         Principal = { Service = "logs.us-east-1.amazonaws.com" }
         Action = [
           "kms:Encrypt",
@@ -249,19 +249,21 @@ resource "aws_kms_key_policy" "ota_restricted" {
   })
 }
 
-# checkov:skip=CKV_AWS_144: Cross-region replication is not required for this dev environment.
+# checkov:skip=CKV_AWS_144:Dev environment, no replication needed.
 resource "aws_s3_bucket" "ota_packages" {
-  bucket = "${var.project_name}-ota-packages-${var.environment}"
+  bucket        = "${var.project_name}-ota-packages-${var.environment}"
   force_destroy = var.environment == "dev"
 }
 
 resource "aws_s3_bucket_versioning" "ota_packages" {
   bucket = aws_s3_bucket.ota_packages.id
-  versioning_configuration { status = "Enabled" }
+  versioning_configuration {
+    status = "Enabled"
+  }
 }
 
 resource "aws_s3_bucket_public_access_block" "ota_packages" {
-  bucket = aws_s3_bucket.ota_packages.id
+  bucket                  = aws_s3_bucket.ota_packages.id
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
@@ -281,21 +283,30 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "ota_packages" {
 
 resource "aws_s3_bucket_ownership_controls" "ota_packages" {
   bucket = aws_s3_bucket.ota_packages.id
-  rule { object_ownership = "BucketOwnerEnforced" }
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
 }
 
 resource "aws_s3_bucket_policy" "ota_packages" {
   bucket = aws_s3_bucket.ota_packages.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Sid       = "DenyNonTLS"
-      Effect    = "Deny"
-      Principal = "*"
-      Action    = "s3:*"
-      Resource = [aws_s3_bucket.ota_packages.arn, "${aws_s3_bucket.ota_packages.arn}/*"]
-      Condition = { Bool = { "aws:SecureTransport" = "false" } }
-    }]
+    Statement = [
+      {
+        Sid       = "DenyNonTLS"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource = [
+          aws_s3_bucket.ota_packages.arn,
+          "${aws_s3_bucket.ota_packages.arn}/*",
+        ]
+        Condition = {
+          Bool = { "aws:SecureTransport" = "false" }
+        }
+      },
+    ]
   })
 }
 
@@ -305,8 +316,12 @@ resource "aws_s3_bucket_lifecycle_configuration" "ota_packages" {
     id     = "expire-old-releases"
     status = "Enabled"
     filter {}
-    noncurrent_version_expiration { noncurrent_days = 90 }
-    abort_incomplete_multipart_upload { days_after_initiation = 7 }
+    noncurrent_version_expiration {
+      noncurrent_days = 90
+    }
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
   }
 }
 
@@ -319,19 +334,19 @@ resource "aws_iam_policy" "ota_publisher" {
       {
         Sid      = "PublishReleases"
         Effect   = "Allow"
-        Action = ["s3:PutObject", "s3:AbortMultipartUpload"]
+        Action   = ["s3:PutObject", "s3:AbortMultipartUpload"]
         Resource = ["${aws_s3_bucket.ota_packages.arn}/packages/*"]
       },
       {
         Sid      = "PublishSignatures"
         Effect   = "Allow"
-        Action = ["s3:PutObject"]
+        Action   = ["s3:PutObject"]
         Resource = ["${aws_s3_bucket.ota_packages.arn}/signatures/*"]
       },
       {
         Sid      = "EncryptWithOurKey"
         Effect   = "Allow"
-        Action = ["kms:GenerateDataKey", "kms:DescribeKey"]
+        Action   = ["kms:GenerateDataKey", "kms:DescribeKey"]
         Resource = [aws_kms_key.ota.arn]
       }
     ]
@@ -352,11 +367,15 @@ resource "aws_iam_role" "iot_logging" {
   name = "${var.project_name}-iot-logging-role"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Principal = { Service = "iot.amazonaws.com" }
-      Action = "sts:AssumeRole"
-    }]
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "iot.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      },
+    ]
   })
 }
 
@@ -365,16 +384,18 @@ resource "aws_iam_role_policy" "iot_logging" {
   role = aws_iam_role.iot_logging.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = ["logs:CreateLogStream", "logs:PutLogEvents"]
-      Resource = ["${aws_cloudwatch_log_group.iot_core.arn}:*"]
-    }]
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = ["${aws_cloudwatch_log_group.iot_core.arn}:*"]
+      },
+    ]
   })
 }
 
 resource "aws_iot_logging_options" "core" {
-  role_arn = aws_iam_role.iot_logging.arn
+  role_arn          = aws_iam_role.iot_logging.arn
   default_log_level = "INFO"
 }
 
@@ -396,7 +417,7 @@ resource "aws_iot_topic_rule" "telemetry_route" {
 # --------------------------------------------------------------
 
 resource "aws_sns_topic" "fleet_alerts" {
-  name = "${var.project_name}-fleet-alerts"
+  name              = "${var.project_name}-fleet-alerts"
   kms_master_key_id = aws_kms_key.ota.id
 }
 
@@ -408,13 +429,15 @@ resource "aws_sns_topic_policy" "fleet_alerts_policy" {
     Statement = [
       {
         Effect = "Allow"
-        Principal = { Service = "s3.amazonaws.com" }
+        Principal = {
+          Service = "s3.amazonaws.com"
+        }
         Action   = "sns:Publish"
         Resource = [aws_sns_topic.fleet_alerts.arn]
         Condition = {
           ArnLike = { "aws:SourceArn" = aws_s3_bucket.ota_packages.arn }
         }
-      }
+      },
     ]
   })
 }
@@ -425,7 +448,7 @@ resource "aws_cloudwatch_log_metric_filter" "telemetry_heartbeat" {
   log_group_name = aws_cloudwatch_log_group.iot_core.name
 
   metric_transformation {
-    name       = "HeartbeatCount"
+    name      = "HeartbeatCount"
     namespace = "SecureEdgeFleet"
     value     = "1"
   }
@@ -443,19 +466,21 @@ resource "aws_cloudwatch_metric_alarm" "device_offline" {
   alarm_actions       = [aws_sns_topic.fleet_alerts.arn]
 }
 
-# checkov:skip=CKV_AWS_144: Cross-region replication is not required for this dev environment.
+# checkov:skip=CKV_AWS_144:Dev environment, no replication needed.
 resource "aws_s3_bucket" "log_bucket" {
   bucket = "${var.project_name}-logs-${var.environment}"
 }
 
-# checkov:skip=CKV2_AWS_65: log_bucket must use BucketOwnerPreferred to allow log-delivery-write ACL.
+# checkov:skip=CKV2_AWS_65:Required for log-delivery-write ACL.
 resource "aws_s3_bucket_ownership_controls" "log_bucket_oc" {
   bucket = aws_s3_bucket.log_bucket.id
-  rule { object_ownership = "BucketOwnerPreferred" }
+  rule {
+    object_ownership = "BucketOwnerPreferred"
+  }
 }
 
 resource "aws_s3_bucket_public_access_block" "log_bucket_public_access" {
-  bucket = aws_s3_bucket.log_bucket.id
+  bucket                  = aws_s3_bucket.log_bucket.id
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
@@ -464,7 +489,9 @@ resource "aws_s3_bucket_public_access_block" "log_bucket_public_access" {
 
 resource "aws_s3_bucket_versioning" "log_bucket_versioning" {
   bucket = aws_s3_bucket.log_bucket.id
-  versioning_configuration { status = "Enabled" }
+  versioning_configuration {
+    status = "Enabled"
+  }
 }
 
 resource "aws_s3_bucket_lifecycle_configuration" "log_bucket_lifecycle" {
@@ -473,8 +500,12 @@ resource "aws_s3_bucket_lifecycle_configuration" "log_bucket_lifecycle" {
     id     = "expire-logs"
     status = "Enabled"
     filter {}
-    expiration { days = 365 }
-    abort_incomplete_multipart_upload { days_after_initiation = 7 }
+    expiration {
+      days = 365
+    }
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
   }
 }
 
@@ -489,7 +520,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "log_bucket_encryp
 }
 
 resource "aws_s3_bucket_logging" "ota_logging" {
-  bucket = aws_s3_bucket.ota_packages.id
+  bucket        = aws_s3_bucket.ota_packages.id
   target_bucket = aws_s3_bucket.log_bucket.id
   target_prefix = "log/"
 }
@@ -497,7 +528,16 @@ resource "aws_s3_bucket_logging" "ota_logging" {
 resource "aws_s3_bucket_notification" "ota_notification" {
   bucket = aws_s3_bucket.ota_packages.id
   topic {
-    topic_arn     = aws_sns_topic.fleet_alerts.arn
-    events        = ["s3:ObjectCreated:*"]
+    topic_arn = aws_sns_topic.fleet_alerts.arn
+    events    = ["s3:ObjectCreated:*"]
+  }
+}
+
+# Satisfy CKV2_AWS_62 for log_bucket
+resource "aws_s3_bucket_notification" "log_bucket_notification" {
+  bucket = aws_s3_bucket.log_bucket.id
+  topic {
+    topic_arn = aws_sns_topic.fleet_alerts.arn
+    events    = ["s3:ObjectCreated:*"]
   }
 }
