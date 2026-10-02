@@ -220,7 +220,6 @@ resource "aws_kms_alias" "ota" {
   target_key_id = aws_kms_key.ota.key_id
 }
 
-# Separate policy resource to resolve circular dependency with aws_kms_key.ota
 resource "aws_kms_key_policy" "ota_restricted" {
   key_id = aws_kms_key.ota.id
   policy = jsonencode({
@@ -281,7 +280,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "ota_packages" {
 
 resource "aws_s3_bucket_ownership_controls" "ota_packages" {
   bucket = aws_s3_bucket.ota_packages.id
-  rule { object_ownership = "BucketOwnerPreferred" }
+  rule { object_ownership = "BucketOwnerEnforced" }
 }
 
 resource "aws_s3_bucket_policy" "ota_packages" {
@@ -397,6 +396,7 @@ resource "aws_iot_topic_rule" "telemetry_route" {
 
 resource "aws_sns_topic" "fleet_alerts" {
   name = "${var.project_name}-fleet-alerts"
+  kms_master_key_id = aws_kms_key.ota.id
 }
 
 resource "aws_sns_topic_policy" "fleet_alerts_policy" {
@@ -424,7 +424,7 @@ resource "aws_cloudwatch_log_metric_filter" "telemetry_heartbeat" {
   log_group_name = aws_cloudwatch_log_group.iot_core.name
 
   metric_transformation {
-    name      = "HeartbeatCount"
+    name       = "HeartbeatCount"
     namespace = "SecureEdgeFleet"
     value     = "1"
   }
@@ -448,12 +448,40 @@ resource "aws_s3_bucket" "log_bucket" {
 
 resource "aws_s3_bucket_ownership_controls" "log_bucket_oc" {
   bucket = aws_s3_bucket.log_bucket.id
-  rule { object_ownership = "BucketOwnerPreferred" }
+  rule { object_ownership = "BucketOwnerEnforced" }
 }
 
-resource "aws_s3_bucket_acl" "log_bucket_acl" {
+resource "aws_s3_bucket_public_access_block" "log_bucket_public_access" {
   bucket = aws_s3_bucket.log_bucket.id
-  acl    = "log-delivery-write"
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_versioning" "log_bucket_versioning" {
+  bucket = aws_s3_bucket.log_bucket.id
+  versioning_configuration { status = "Enabled" }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "log_bucket_lifecycle" {
+  bucket = aws_s3_bucket.log_bucket.id
+  rule {
+    id     = "expire-logs"
+    status = "Enabled"
+    filter {}
+    expiration { days = 365 }
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "log_bucket_encryption" {
+  bucket = aws_s3_bucket.log_bucket.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.ota.arn
+    }
+  }
 }
 
 resource "aws_s3_bucket_logging" "ota_logging" {
