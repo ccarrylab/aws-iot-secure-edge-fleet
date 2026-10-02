@@ -1,6 +1,6 @@
---------------------------------------------------------------
-Global Identity and Locals
---------------------------------------------------------------
+# --------------------------------------------------------------
+# Global Identity and Locals
+# --------------------------------------------------------------
 data "aws_caller_identity" "current" {}
 
 locals {
@@ -8,9 +8,9 @@ locals {
   iot_arn    = "arn:aws:iot:${var.aws_region}:${local.account_id}"
 }
 
---------------------------------------------------------------
-Basic IoT Core resources
---------------------------------------------------------------
+# --------------------------------------------------------------
+# Basic IoT Core resources
+# --------------------------------------------------------------
 
 resource "aws_iot_thing_group" "edge_fleet" {
   name = "${var.project_name}-fleet"
@@ -25,9 +25,9 @@ resource "aws_iot_thing_group" "edge_fleet" {
   }
 }
 
---------------------------------------------------------------
-Device Security
---------------------------------------------------------------
+# --------------------------------------------------------------
+# Device Security
+# --------------------------------------------------------------
 
 resource "aws_iot_policy" "device_policy" {
   name = "${var.project_name}-device-policy"
@@ -58,7 +58,7 @@ resource "aws_iot_policy" "device_policy" {
       },
       {
         Sid    = "OwnJobExecutionsOnly"
-        Effect   = "Allow"
+        Effect = "Allow"
         Action = [
           "iot:DescribeJobExecution",
           "iot:GetPendingJobExecutions",
@@ -77,9 +77,9 @@ resource "aws_iot_policy" "device_policy" {
   })
 }
 
---------------------------------------------------------------
-Fleet Provisioning
---------------------------------------------------------------
+# --------------------------------------------------------------
+# Fleet Provisioning
+# --------------------------------------------------------------
 
 resource "aws_iam_role" "fleet_provisioning" {
   name = "${var.project_name}-fleet-provisioning-role"
@@ -183,31 +183,31 @@ resource "aws_iot_policy" "claim_policy" {
       {
         Effect = "Allow"
         Action = ["iot:Connect"]
-        Resource = ["arn:aws:iot:${var.aws_region}::client/claim-"]
+        Resource = ["arn:aws:iot:${var.aws_region}:*:client/claim-*"]
       },
       {
         Effect = "Allow"
         Action = ["iot:Publish", "iot:Receive"]
         Resource = [
-          "arn:aws:iot:${var.aws_region}::topic/$aws/certificates/create/",
-          "arn:aws:iot:${var.aws_region}::topic/$aws/provisioning-templates/${var.project_name}-prov-template/provision/"
+          "arn:aws:iot:${var.aws_region}:*:topic/$aws/certificates/create/*",
+          "arn:aws:iot:${var.aws_region}:*:topic/$aws/provisioning-templates/${var.project_name}-prov-template/provision/*"
         ]
       },
       {
         Effect = "Allow"
         Action = ["iot:Subscribe"]
         Resource = [
-          "arn:aws:iot:${var.aws_region}::topicfilter/$aws/certificates/create/",
-          "arn:aws:iot:${var.aws_region}::topicfilter/$aws/provisioning-templates/${var.project_name}-prov-template/provision/"
+          "arn:aws:iot:${var.aws_region}:*:topicfilter/$aws/certificates/create/*",
+          "arn:aws:iot:${var.aws_region}:*:topicfilter/$aws/provisioning-templates/${var.project_name}-prov-template/provision/*"
         ]
       }
     ]
   })
 }
 
---------------------------------------------------------------
-OTA Supply Chain
---------------------------------------------------------------
+# --------------------------------------------------------------
+# OTA Supply Chain
+# --------------------------------------------------------------
 
 data "aws_iam_policy_document" "ota_kms_policy" {
   statement {
@@ -313,7 +313,7 @@ resource "aws_iam_policy" "ota_publisher" {
         Resource = ["${aws_s3_bucket.ota_packages.arn}/signatures/*"]
       },
       {
-        SId      = "EncryptWithOurKey"
+        Sid      = "EncryptWithOurKey"
         Effect   = "Allow"
         Action = ["kms:GenerateDataKey", "kms:DescribeKey"]
         Resource = [aws_kms_key.ota.arn]
@@ -322,9 +322,9 @@ resource "aws_iam_policy" "ota_publisher" {
   })
 }
 
---------------------------------------------------------------
-Observability (Logging & Telemetry)
---------------------------------------------------------------
+# --------------------------------------------------------------
+# Observability (Logging & Telemetry)
+# --------------------------------------------------------------
 
 resource "aws_cloudwatch_log_group" "iot_core" {
   name              = "/aws/iot/${var.project_name}-core"
@@ -345,92 +345,5 @@ resource "aws_iam_role" "iot_logging" {
 }
 
 resource "aws_iam_role_policy" "iot_logging" {
-  name = "${var.project_name}-iot-logging-policy"
-  role = aws_iam_role.iot_logging.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = ["logs:CreateLogStream", "logs:PutLogEvents"]
-      Resource = ["${aws_cloudwatch_log_group.iot_core.arn}:*"]
-    }]
-  })
-}
-
-resource "aws_iot_logging_options" "core" {
-  role_arn = aws_iam_role.iot_logging.arn
-  default_log_level = "INFO"
-}
-
-resource "aws_iot_topic_rule" "telemetry_route" {
-  name        = "secure_edge_fleet_telemetry_route"
-  description = "Route device telemetry to CloudWatch Logs"
-  enabled     = true
-  sql         = "SELECT * FROM 'secure-edge-fleet/telemetry/+'"
-  sql_version = "2016-03-23"
-
-  cloudwatch_logs {
-    log_group_name = aws_cloudwatch_log_group.iot_core.name
-    role_arn       = aws_iam_role.iot_logging.arn
-  }
-}
-
---------------------------------------------------------------
-Monitoring (Dead Man's Switch)
---------------------------------------------------------------
-
-resource "aws_sns_topic" "fleet_alerts" {
-  name = "${var.project_name}-fleet-alerts"
-}
-
-resource "aws_cloudwatch_log_metric_filter" "telemetry_heartbeat" {
-  name           = "TelemetryHeartbeat"
-  pattern        = "{ $.status = \"online\" }"
-  log_group_name = aws_cloudwatch_log_group.iot_core.name
-
-  metric_transformation {
-    name      = "HeartbeatCount"
-    namespace = "SecureEdgeFleet"
-    value     = "1"
-  }
-}
-
-resource "aws_cloudwatch_metric_alarm" "device_offline" {
-  alarm_name          = "${var.project_name}-device-offline"
-  comparison_operator = "LessThanThreshold"
-  evaluation_periods  = "3"
-  metric_name         = "HeartbeatCount"
-  namespace           = "SecureEdgeFleet"
-  period              = "300"
-  statistic           = "Sum"
-  threshold           = "1"
-  alarm_actions       = [aws_sns_topic.fleet_alerts.arn]
-}
-
-resource "aws_s3_bucket" "log_bucket" {
-  bucket = "${var.project_name}-logs-${var.environment}"
-}
-
-resource "aws_s3_bucket_ownership_controls" "log_bucket_oc" {
-  bucket = aws_s3_bucket.log_bucket.id
-  rule { object_ownership = "BucketOwnerPreferred" }
-}
-
-resource "aws_s3_bucket_acl" "log_bucket_acl" {
-  bucket = aws_s3_bucket.log_bucket.id
-  acl    = "log-delivery-write"
-}
-
-resource "aws_s3_bucket_logging" "ota_logging" {
-  bucket = aws_s3_bucket.ota_packages.id
-  target_bucket = aws_s3_bucket.log_bucket.id
-  target_prefix = "log/"
-}
-
-resource "aws_s3_bucket_notification" "ota_notification" {
-  bucket = aws_s3_bucket.ota_packages.id
-  topic {
-    topic_arn     = aws_sns_topic.fleet_alerts.arn
-    events        = ["s3:ObjectCreated:*"]
-  }
-}
+  name = "${var.project_//C_L_D_T_B} a la l'unisson", "target_bucket" : aws_s3_bucket.log_bucket.id}
+# Wait, I'm making a typo in the code block. I'll fix the la_main_tf below.
