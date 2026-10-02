@@ -385,7 +385,7 @@ resource "aws_sns_topic" "fleet_alerts" {
 
 resource "aws_cloudwatch_log_metric_filter" "telemetry_heartbeat" {
   name           = "TelemetryHeartbeat"
-  pattern        = "{ $.status = "online" }"
+  pattern        = "{ $.status = \"online\" }"
   log_group_name = aws_cloudwatch_log_group.iot_core.name
 
   metric_transformation {
