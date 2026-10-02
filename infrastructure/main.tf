@@ -392,12 +392,6 @@ resource "aws_s3_bucket_logging" "ota_logging" {
   target_bucket = aws_s3_bucket.log_bucket.id
   target_prefix = "log/"
 }
-resource "aws_s3_bucket_notification" "ota_notification" {
-  bucket = aws_s3_bucket.ota_packages.id
-  topic {
-    topic_arn     = aws_sns_topic.fleet_alerts.arn
-    events        = ["s3:ObjectCreated:*"]
-  }
 }
 resource "aws_sns_topic" "fleet_alerts" {
   name = "${var.project_name}-fleet-alerts"
@@ -423,8 +417,11 @@ resource "aws_cloudwatch_metric_alarm" "device_offline" {
   threshold           = "1"
   alarm_actions       = [aws_sns_topic.fleet_alerts.arn]
 }
+}
+
 resource "aws_s3_bucket_notification" "ota_notification" {
   bucket = aws_s3_bucket.ota_packages.id
+
   topic {
     topic_arn     = aws_sns_topic.fleet_alerts.arn
     events        = ["s3:ObjectCreated:*"]
