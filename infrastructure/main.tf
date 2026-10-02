@@ -303,7 +303,7 @@ resource "aws_iam_policy" "ota_publisher" {
       {
         Sid      = "PublishReleases"
         Effect   = "Allow"
-        Action   = ["s3:PutObject", "s3:AbortMultipartUpload"]
+        Action = ["s3:PutObject", "s3:AbortMultipartUpload"]
         Resource = ["${aws_s3_bucket.ota_packages.arn}/packages/*"]
       },
       {
@@ -313,9 +313,9 @@ resource "aws_iam_policy" "ota_publisher" {
         Resource = ["${aws_s3_bucket.ota_packages.arn}/signatures/*"]
       },
       {
-        Sid      = "EncryptWithOurKey"
+        SId      = "EncryptWithOurKey"
         Effect   = "Allow"
-        Action   = ["kms:GenerateDataKey", "kms:DescribeKey"]
+        Action = ["kms:GenerateDataKey", "kms:DescribeKey"]
         Resource = [aws_kms_key.ota.arn]
       }
     ]
