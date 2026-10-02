@@ -247,6 +247,7 @@ resource "aws_kms_key" "ota" {
   description             = "Encryption for ${var.project_name} OTA packages"
   deletion_window_in_days = 30
   enable_key_rotation     = true
+  policy = data.aws_iam_policy_document.ota_kms_policy.json
 }
 
 resource "aws_kms_alias" "ota" {
@@ -358,7 +359,9 @@ resource "aws_iam_policy" "ota_publisher" {
 # --------------------------------------------------------------
 
 resource "aws_cloudwatch_log_group" "iot_core" {
-  name = "/aws/iot/${var.project_name}-core"
+  name              = "/aws/iot/${var.project_name}-core"
+  retention_in_days = 365
+  kms_key_id        = aws_kms_key.ota.arn
 }
 
 resource "aws_iam_role" "iot_logging" {
@@ -402,3 +405,46 @@ resource "aws_iot_logging_options" "core" {
   default_log_level = "INFO"
 }
 
+
+data "aws_iam_policy_document" "ota_kms_policy" {
+  statement {
+    sid    = "Enable IAM User Permissions"
+    effect = "Allow"
+    principals {
+      type        = "AWS"
+      identifiers = ["${data.aws_caller_identity.current.arn}"]
+    }
+    actions   = ["kms:*"]
+    resources = ["*"]
+  }
+}
+
+resource "aws_s3_bucket" "log_bucket" {
+  bucket = "${var.project_name}-logs-${var.environment}"
+}
+
+resource "aws_s3_bucket_ownership_controls" "log_bucket_oc" {
+  bucket = aws_s3_bucket.log_bucket.id
+  rule { object_ownership = "BucketOwnerPreferred" }
+}
+
+resource "aws_s3_bucket_acl" "log_bucket_acl" {
+  bucket = aws_s3_bucket.log_bucket.id
+  acl    = "log-delivery-write"
+}
+
+resource "aws_s3_bucket_logging" "ota_logging" {
+  bucket = aws_s3_bucket.ota_packages.id
+  target_bucket = aws_s3_bucket.log_bucket.id
+  target_prefix = "log/"
+}
+
+
+resource "aws_s3_bucket_notification" "ota_notification" {
+  bucket = aws_s3_bucket.ota_packages.id
+
+  topic {
+    topic_arn     = aws_sns_topic.fleet_alerts.arn
+    events        = ["s3:ObjectCreated:*"]
+  }
+}
