@@ -220,6 +220,23 @@ data "aws_iam_policy_document" "ota_kms_policy" {
     actions   = ["kms:*"]
     resources = ["*"]
   }
+
+  statement {
+    sid    = "AllowCloudWatchLogs"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["logs.us-east-1.amazonaws.com"]
+    }
+    actions = [
+      "kms:Encrypt",
+      "kms:Decrypt",
+      "kms:ReEncrypt*",
+      "kms:GenerateDataKey*",
+      "kms:DescribeKey"
+    ]
+    resources = ["*"]
+  }
 }
 
 resource "aws_kms_key" "ota" {
@@ -265,7 +282,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "ota_packages" {
 
 resource "aws_s3_bucket_ownership_controls" "ota_packages" {
   bucket = aws_s3_bucket.ota_packages.id
-  rule { object_ownership = "BucketOwnerEnforced" }
+  rule { object_ownership = "BucketOwnerPreferred" }
 }
 
 resource "aws_s3_bucket_policy" "ota_packages" {
@@ -381,6 +398,25 @@ resource "aws_iot_topic_rule" "telemetry_route" {
 
 resource "aws_sns_topic" "fleet_alerts" {
   name = "${var.project_name}-fleet-alerts"
+}
+
+resource "aws_sns_topic_policy" "fleet_alerts_policy" {
+  arn = aws_sns_topic.fleet_alerts.arn
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = { Service = "s3.amazonaws.com" }
+        Action   = "sns:Publish"
+        Resource = [aws_sns_topic.fleet_alerts.arn]
+        Condition = {
+          ArnLike = { "aws:SourceArn" = aws_s3_bucket.ota_packages.arn }
+        }
+      }
+    ]
+  })
 }
 
 resource "aws_cloudwatch_log_metric_filter" "telemetry_heartbeat" {
