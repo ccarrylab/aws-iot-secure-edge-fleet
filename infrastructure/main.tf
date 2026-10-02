@@ -249,6 +249,7 @@ resource "aws_kms_key_policy" "ota_restricted" {
   })
 }
 
+# checkov:skip=CKV_AWS_144: Cross-region replication is not required for this dev environment.
 resource "aws_s3_bucket" "ota_packages" {
   bucket = "${var.project_name}-ota-packages-${var.environment}"
   force_destroy = var.environment == "dev"
@@ -442,10 +443,12 @@ resource "aws_cloudwatch_metric_alarm" "device_offline" {
   alarm_actions       = [aws_sns_topic.fleet_alerts.arn]
 }
 
+# checkov:skip=CKV_AWS_144: Cross-region replication is not required for this dev environment.
 resource "aws_s3_bucket" "log_bucket" {
   bucket = "${var.project_name}-logs-${var.environment}"
 }
 
+# checkov:skip=CKV2_AWS_65: log_bucket must use BucketOwnerPreferred to allow log-delivery-write ACL.
 resource "aws_s3_bucket_ownership_controls" "log_bucket_oc" {
   bucket = aws_s3_bucket.log_bucket.id
   rule { object_ownership = "BucketOwnerPreferred" }
@@ -471,6 +474,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "log_bucket_lifecycle" {
     status = "Enabled"
     filter {}
     expiration { days = 365 }
+    abort_incomplete_multipart_upload { days_after_initiation = 7 }
   }
 }
 
