@@ -566,6 +566,7 @@ class FleetProvisioner:
 # Main
 # -------------------------------------------------
 def main() -> int:
+    print("Agent v1.6.0 starting up...")
     """Run the agent. Returns an exit code; never raises SystemExit.
 
     Callers that want a process exit do `sys.exit(main())`, which is what
