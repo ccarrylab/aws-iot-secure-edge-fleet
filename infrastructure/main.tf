@@ -387,7 +387,7 @@ resource "aws_iam_role_policy" "iot_logging" {
     Statement = [
       {
         Effect   = "Allow"
-        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+        Action   = ["logs:CreateLlogStream", "logs:PutLogEvents"]
         Resource = ["${aws_cloudwatch_log_group.iot_core.arn}:*"]
       },
     ]
