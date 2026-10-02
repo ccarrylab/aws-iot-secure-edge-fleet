@@ -326,32 +326,32 @@ def parse_args(argv):
 
 def main(argv=None):
     args = parse_args(argv if argv is not None else sys.argv[1:])
-
+    
     if args.verify_only:
         info("sha256  %s  %s" % (sha256_file(args.verify_only), args.verify_only))
         return 0
-
+    
     if not VERSION_RE.match(args.version):
-        die("invalid version %r\n  must match %s (the agent rejects anything else)"
+        die("invalid version %r\\n  must match %s (the agent rejects anything else)"
             % (args.version, VERSION_RE.pattern))
-
+    
     if not args.bucket:
         die("no bucket: pass --bucket or set OTA_BUCKET")
-
+    
     if args.canary:
         if not args.thing_arn:
             die("--canary needs --thing-arn so it targets exactly one device")
         args.abort_failure_pct = 1
         info("canary mode: one target, abort on the first failure")
-
+    
     ttl = min(args.url_ttl_hours * 3600, PRESIGN_MAX_SECONDS)
     if args.url_ttl_hours * 3600 > PRESIGN_MAX_SECONDS:
         info("note: presigned URLs cap at 7 days; using %d seconds" % PRESIGN_MAX_SECONDS)
-
+    
     info("=== publishing edge-agent %s ===" % args.version)
     if args.dry_run:
         info("(dry run - nothing will be created)")
-
+    
     info("")
     info("[1/6] packaging %s" % args.build_dir)
     tmpdir = tempfile.mkdtemp(prefix="ota-publish-")
@@ -363,15 +363,15 @@ def main(argv=None):
         die("package is %d bytes; the agent refuses anything over %d (256 MiB)"
             % (size, MAX_PACKAGE_BYTES))
     info("  contents: %s%s" % (", ".join(rels[:6]), " ..." if len(rels) > 6 else ""))
-
+    
     info("")
     info("[2/6] hashing")
     checksum = sha256_file(tarball)
     info("  sha256 %s" % checksum)
-
+    
     key = "%s%s.tar.gz" % (args.key_prefix, args.version)
     s3_uri = "s3://%s/%s" % (args.bucket, key)
-
+    
     info("")
     info("[3/6] uploading to %s" % s3_uri)
     put = ["aws", "s3", "cp", tarball, s3_uri,
@@ -381,21 +381,22 @@ def main(argv=None):
     else:
         info("  WARNING: no --kms-key given; uploading without SSE-KMS")
     run(put, args.dry_run)
-
+    
     info("")
     info("[4/6] building the job document")
-    job_id = "edge-agent-%s-%s" % (
-        args.version, datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S"))
+    # FIX: Job ID must satisfy [a-zA-Z0-9_-]+. Removed the dots.
+    job_id = "edge_agent_%s_%s" % (
+        args.version.replace('.', '_'), datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S"))
     url = presign(args.bucket, key, ttl, args.dry_run)
-
+    
     rollback = args.rollback_version or latest_deployed_version(job_id, args.dry_run)
     if rollback:
         info("  rollbackVersion: %s" % rollback)
     else:
         info("  rollbackVersion: none - no completed job found; devices keep their own previous")
-
+    
     document = build_document(args.version, url, checksum, rollback, s3_uri=s3_uri)
-
+    
     if args.signing_key:
         info("")
         info("[S+0] signing manifest")
@@ -403,7 +404,7 @@ def main(argv=None):
         sig = sign_manifest(manifest_text.encode(), args.signing_key)
         document["manifestSig"] = sig
         info("  signature: %s..." % sig[:20])
-
+    
     doc_path = os.path.join(tmpdir, "job-document.json")
     with open(doc_path, "w") as fh:
         json.dump(document, fh, indent=2, sort_keys=True)
@@ -411,14 +412,14 @@ def main(argv=None):
     for k in ("version", "checksum", "rollbackVersion"):
         if k in document:
             info("    %-16s %s" % (k, document[k]))
-
+    
     info("")
     info("[5/6] verifying the uploaded artifact")
     if args.dry_run:
         info("  skipped in dry run")
     else:
         verify_uploaded(url, checksum)
-
+    
     info("")
     info("[6/6] creating the IoT job")
     abort = abort_config(args.abort_failure_pct)
@@ -426,14 +427,14 @@ def main(argv=None):
          % (args.abort_failure_pct,
             abort["criteriaList"][0]["minNumberOfExecutedThings"]))
     info("  rollout: %d device(s)/minute" % args.rollout_per_minute)
-
+    
     if args.thing_arn:
         targets = [args.thing_arn]
     elif args.thing_group:
         targets = [resolve_thing_group_arn(args.thing_group, args.dry_run)]
     else:
         die("no target: pass --thing-group or --thing-arn")
-
+    
     create = ["aws", "iot", "create-job",
               "--job-id", job_id,
               "--targets"] + targets + [
@@ -445,7 +446,7 @@ def main(argv=None):
               "--abort-config", json.dumps(abort),
               "--output", "json"]
     run(create, args.dry_run)
-
+    
     info("")
     info("=== %s ===" % ("dry run complete" if args.dry_run else "published"))
     info("  job id   %s" % job_id)

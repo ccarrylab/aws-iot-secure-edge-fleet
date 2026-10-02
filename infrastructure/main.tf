@@ -399,18 +399,6 @@ resource "aws_iam_role_policy" "iot_logging" {
 
 resource "aws_iot_logging_options" "core" {
   role_arn = aws_iam_role.iot_logging.arn
-  log_level = "INFO"
+  default_log_level = "INFO"
 }
 
-resource "aws_iot_topic_rule" "telemetry_route" {
-  name        = "${var.project_name}-telemetry-route"
-  description = "Route device telemetry to CloudWatch Logs"
-  enabled     = true
-
-  sql = "SELECT * FROM 'secure-edge-fleet/telemetry/+'"
-  sql_version = "2016-03-23"
-
-  # For a fully working rule, an action must be defined.
-  # To keep it a "better" repo without guessing the user's exact log destination,
-  # we've provided the structural rule.
-}
