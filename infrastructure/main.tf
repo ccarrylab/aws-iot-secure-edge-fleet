@@ -58,7 +58,7 @@ resource "aws_iot_policy" "device_policy" {
       },
       {
         Sid    = "OwnJobExecutionsOnly"
-        Effect = "Allow"
+        Effect   = "Allow"
         Action = [
           "iot:DescribeJobExecution",
           "iot:GetPendingJobExecutions",
@@ -309,7 +309,7 @@ resource "aws_iam_policy" "ota_publisher" {
       {
         Sid      = "PublishSignatures"
         Effect   = "Allow"
-        Action   = ["s3:PutObject"]
+        Action = ["s3:PutObject"]
         Resource = ["${aws_s3_bucket.ota_packages.arn}/signatures/*"]
       },
       {
